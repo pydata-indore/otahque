@@ -1,11 +1,11 @@
-from django.http import Http404, HttpResponse
+from django.http import Http404
 from django.shortcuts import render
 
 SAMPLE_EVENTS = {1: 'Python meetup'}
 
 
 def home(request):
-    return HttpResponse('Welcome to Otahque.')
+    return render(request, 'events/home.html')
 
 
 def event_list(request):

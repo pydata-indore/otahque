@@ -1,16 +1,10 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1">
-  <title>Sample event | Otahque</title>
-</head>
-<body>
-  <main>
-    <h1>Sample: {{ title }}</h1>
-    <p>This fictional event is an example.</p>
-    <a href="{% url 'events:list' %}">All sample events</a>
-  </main>
-</body>
-</html>
+{% extends "base.html" %}
+{% load event_labels %}
+
+{% block title %}Sample event | Otahque{% endblock %}
+
+{% block content %}
+  <h1>{{ title|sample_label }}</h1>
+  <p>This fictional event is an example.</p>
+  <a href="{% url 'events:list' %}">All sample events</a>
+{% endblock %}
