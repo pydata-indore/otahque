@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+from django.template import Context, Template
+from django.template.loader import render_to_string
 from django.test import SimpleTestCase
 from django.urls import resolve, reverse
 
@@ -40,7 +42,10 @@ class EventDetailTests(SimpleTestCase):
     def test_sample_event(self):
         response = self.client.get('/events/1/')
         self.assertContains(
-            response, 'Sample: Python meetup'
+            response,
+            '<h1><span class="sample-label">Sample:</span>'
+            ' Python meetup</h1>',
+            html=True,
         )
         self.assertTemplateUsed(
             response, 'events/detail.html'
@@ -99,3 +104,76 @@ class TemplateSafetyTests(SimpleTestCase):
         self.assertNotContains(
             response, '<strong>Not a tag'
         )
+
+
+class LayoutTests(SimpleTestCase):
+    pages = [
+        ('/', 'events/home.html', 'Otahque'),
+        ('/events/', 'events/list.html',
+         'Sample events | Otahque'),
+        ('/events/1/', 'events/detail.html',
+         'Sample event | Otahque'),
+    ]
+
+    def test_pages_extend_layout(self):
+        for url, template, title in self.pages:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertTemplateUsed(response, template)
+                self.assertTemplateUsed(
+                    response, 'base.html'
+                )
+                self.assertContains(
+                    response, f'<title>{title}</title>',
+                    html=True,
+                )
+
+    def test_pages_include_navigation(self):
+        for url, template, title in self.pages:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertTemplateUsed(
+                    response, 'includes/site_nav.html'
+                )
+                self.assertContains(
+                    response,
+                    '<a href="/">Home</a>',
+                    html=True,
+                )
+                self.assertContains(
+                    response,
+                    '<a href="/events/">Events</a>',
+                    html=True,
+                )
+
+
+class EventRowPartialTests(SimpleTestCase):
+    def test_row_renders_alone(self):
+        event = {'id': 1, 'title': '<b>Not a tag</b>'}
+        html = render_to_string(
+            'events/list.html#event-row', {'event': event}
+        )
+        self.assertIn('href="/events/1/"', html)
+        self.assertIn('&lt;b&gt;Not a tag', html)
+        self.assertNotIn('<nav', html)
+
+
+class SampleLabelFilterTests(SimpleTestCase):
+    def render_label(self, title):
+        template = Template(
+            '{% load event_labels %}{{ title|sample_label }}'
+        )
+        return template.render(Context({'title': title}))
+
+    def test_labels_title(self):
+        self.assertEqual(
+            self.render_label('Python meetup'),
+            '<span class="sample-label">Sample:</span>'
+            ' Python meetup',
+        )
+
+    def test_escapes_title(self):
+        title = '<strong>Not a tag</strong>'
+        html = self.render_label(title)
+        self.assertIn('&lt;strong&gt;', html)
+        self.assertNotIn('<strong>', html)
