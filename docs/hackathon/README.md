@@ -6,3 +6,4 @@ branch `chapters-06-11-baseline`, reviewed in its own pull request.
 
 | Day | Date | Capability | Log | Review note |
 |---|---|---|---|---|
+| 1 | 2 November 2026 | Chapter 12: shared layout, navigation, event-row partial, `sample_label` filter | [DAY_01](DAY_01.md) | [day-01-ch12-layout](../reviews/qodo/day-01-ch12-layout.md) |
