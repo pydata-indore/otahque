@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
+  <title>Sample events | Otahque</title>
+</head>
+<body>
+  <main>
+    <h1>Sample events</h1>
+    <p>These fictional events are examples.</p>
+    <ul>
+      {% for event in events %}
+        <li>
+          <a href="{% url 'events:detail' event.id %}">
+            {{ event.title }}
+          </a>
+        </li>
+      {% empty %}
+        <li>No sample events yet.</li>
+      {% endfor %}
+    </ul>
+  </main>
+</body>
+</html>
