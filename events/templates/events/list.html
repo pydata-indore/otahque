@@ -1,26 +1,22 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1">
-  <title>Sample events | Otahque</title>
-</head>
-<body>
-  <main>
-    <h1>Sample events</h1>
-    <p>These fictional events are examples.</p>
-    <ul>
-      {% for event in events %}
+{% extends "base.html" %}
+{% load event_labels %}
+
+{% block title %}Sample events | Otahque{% endblock %}
+
+{% block content %}
+  <h1>Sample events</h1>
+  <p>These fictional events are examples.</p>
+  <ul>
+    {% for event in events %}
+      {% partialdef event-row inline %}
         <li>
           <a href="{% url 'events:detail' event.id %}">
-            {{ event.title }}
+            {{ event.title|sample_label }}
           </a>
         </li>
-      {% empty %}
-        <li>No sample events yet.</li>
-      {% endfor %}
-    </ul>
-  </main>
-</body>
-</html>
+      {% endpartialdef %}
+    {% empty %}
+      <li>No sample events yet.</li>
+    {% endfor %}
+  </ul>
+{% endblock %}
