@@ -1,0 +1,63 @@
+/* Otahque shared styles */
+
+body {
+  margin: 0;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+  color: #1b2735;
+  background: #f4f6f9;
+}
+
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+a {
+  color: #0759ce;
+}
+
+a:focus-visible {
+  outline: 3px solid #0759ce;
+  outline-offset: 2px;
+}
+
+.site-nav {
+  background: #142b46;
+  padding: 0.75rem 1rem;
+}
+
+.site-nav a {
+  color: #ffffff;
+  font-weight: 600;
+  margin-right: 1.25rem;
+}
+
+.site-nav a:focus-visible {
+  outline-color: #ffffff;
+}
+
+.event-list {
+  list-style: none;
+  padding: 0;
+}
+
+.event-row,
+.event-empty {
+  background: #ffffff;
+  border: 1px solid #d5dde8;
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.event-row a {
+  font-weight: 600;
+}
+
+.sample-label {
+  color: #9d480c;
+  font-size: 0.85em;
+  font-weight: 700;
+}
