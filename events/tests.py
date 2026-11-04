@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.contrib.staticfiles import finders
 from django.template import Context, Template
 from django.template.loader import render_to_string
 from django.test import SimpleTestCase
@@ -177,3 +178,21 @@ class SampleLabelFilterTests(SimpleTestCase):
         html = self.render_label(title)
         self.assertIn('&lt;strong&gt;', html)
         self.assertNotIn('<strong>', html)
+
+
+class StylesheetTests(SimpleTestCase):
+    def test_pages_link_stylesheet(self):
+        for url, template, title in LayoutTests.pages:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertContains(
+                    response,
+                    '<link rel="stylesheet"'
+                    ' href="/static/otahque/site.css">',
+                    html=True,
+                )
+
+    def test_finder_locates_stylesheet(self):
+        self.assertIsNotNone(
+            finders.find('otahque/site.css')
+        )
