@@ -10,9 +10,11 @@ beginner must be able to follow it. The code covers Chapters 6 to 14
 and daisyUI). There are no models or accounts yet; sample events are
 fictional and held in memory.
 
-Full detail: [docs/STANDARDS.md](docs/STANDARDS.md) and
-[docs/VERSION_BASELINE.md](docs/VERSION_BASELINE.md). Where the project
-stands: the "Where the code is now" table in [README.md](README.md).
+Full detail: [docs/STANDARDS.md](docs/STANDARDS.md),
+[docs/VERSION_BASELINE.md](docs/VERSION_BASELINE.md), and
+[docs/BOOK_SYNC.md](docs/BOOK_SYNC.md) (how merged code becomes book
+content). Where the project stands: the "Where the code is now" table
+in [README.md](README.md).
 
 ## Setup
 
@@ -58,16 +60,22 @@ If a template or `static/otahque/source.css` changed, also run
   setting in `events/` and `config/`.
 - Why: each step must run from the previous checkpoint, and the reader
   sees the test fail before the code makes it pass. Cover the failure
-  case too: a 404, an empty state, or escaped input.
+  case too: a 404, an empty state, or escaped input. The first commit
+  of a pull request may hold the failing tests; every merge to `main`
+  passes.
 
-### 3. Keep Django's automatic escaping
+### 3. Security: escaping and secrets
 
-- Applies to: templates, `events/templatetags/`, and any HTML built in
-  Python.
+- Applies to: templates, `events/templatetags/`, any HTML built in
+  Python, `config/settings.py`, and sample data.
 - Why: event text will come from users. `|safe`, `mark_safe`, and
   `{% autoescape off %}` need a stated reason and a test that proves
   untrusted input is still escaped. Build HTML with `format_html`, not
   string concatenation.
+- Why: readers copy these settings. No secret in Git;
+  `DJANGO_SECRET_KEY` has no default, so a missing key stops Django;
+  `DEBUG` is on only for the exact text `True`. Sample data is
+  fictional: no real people, emails, or attendance.
 
 ### 4. Use only what the book has taught by that chapter
 
@@ -75,7 +83,9 @@ If a template or `static/otahque/source.css` changed, also run
 - Why: the reader can follow only what has been taught. No models
   before Chapter 15, no custom user before Chapter 17, no migrations
   applied before the custom user exists, and no class-based views before
-  Chapter 35. Do not bundle work from later chapters.
+  Chapter 35. Do not bundle work from later chapters. If a change alters
+  code that an existing chapter already prints, say so in the pull
+  request; the author decides the chapter revision.
 
 ### 5. Pinned versions and generated CSS
 
