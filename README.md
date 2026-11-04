@@ -19,7 +19,7 @@ going through a pull request and a Qodo review before it reaches the book.
 | Project, apps, settings, Git | 6 to 8 | Written before the hackathon; in review |
 | URLs, views, templates | 9 to 11 | Written before the hackathon; in review |
 | Template inheritance, includes, partials | 12 | Day 1 of the hackathon; chapter drafted |
-| Static files, Tailwind, daisyUI | 13 to 14 | Planned |
+| Static files, Tailwind, daisyUI | 13 to 14 | Day 3 of the hackathon; chapters drafted |
 | Models, users, migrations, ORM, admin | 15 to 23 | Planned |
 | Forms, accounts, permissions, registration | 24 to 34 | Planned |
 
@@ -58,6 +58,16 @@ Then check and test:
 ```
 uv run python manage.py check
 uv run python manage.py test events
+```
+
+The compiled stylesheet, `static/otahque/site.css`, is committed, so
+Django runs without Node.js. To change styles, edit
+`static/otahque/source.css` or a template, never `site.css`. Then
+rebuild with Node.js 26.13.0 and npm 11.20.0:
+
+```
+npm ci
+npm run build
 ```
 
 `uv run python manage.py runserver` serves the site on loopback only.
