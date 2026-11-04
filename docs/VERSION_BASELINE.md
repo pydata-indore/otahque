@@ -10,6 +10,13 @@ verified checkpoint.
 | Python | 3.14.9 (regular CPython build) | `.python-version`, `pyproject.toml` |
 | Django | 6.1.2 | `pyproject.toml`, `uv.lock` |
 | python-decouple | 3.8 | `pyproject.toml`, `uv.lock` |
+| Node.js | 26.13.0 (with npm 11.20.0) | `.node-version`, `package.json` `engines` |
+| Tailwind CSS and `@tailwindcss/cli` | 4.3.4 | `package.json`, `package-lock.json` |
+| daisyUI | 5.7.50 | `package.json`, `package-lock.json` |
+
+The Node.js tools build the stylesheet only (Chapter 14, decided by the
+author on 3 November 2026). Django never runs them, and `node_modules/`
+is never committed.
 
 Sources checked when the pins were chosen:
 <https://www.djangoproject.com/download/>,

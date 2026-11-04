@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.staticfiles import finders
@@ -195,4 +196,20 @@ class StylesheetTests(SimpleTestCase):
     def test_finder_locates_stylesheet(self):
         self.assertIsNotNone(
             finders.find('otahque/site.css')
+        )
+
+
+class DesignSystemTests(SimpleTestCase):
+    def test_navigation_uses_navbar(self):
+        response = self.client.get('/')
+        self.assertContains(
+            response, '<nav class="site-nav navbar'
+        )
+
+    def test_stylesheet_defines_navbar(self):
+        found = finders.find('otahque/site.css')
+        css = Path(found).read_text(encoding='utf-8')
+        self.assertTrue(
+            '.navbar {' in css,
+            'site.css has no .navbar rule',
         )
