@@ -4,7 +4,12 @@
 {% block title %}Sample event | Otahque{% endblock %}
 
 {% block content %}
-  <h1>{{ title|sample_label }}</h1>
-  <p>This fictional event is an example.</p>
-  <a href="{% url 'events:list' %}">All sample events</a>
+  <article class="card space-y-4 border border-base-300
+                  bg-base-100 p-6">
+    <h1>{{ title|sample_label }}</h1>
+    <p>This fictional event is an example.</p>
+  </article>
+  <p>
+    <a href="{% url 'events:list' %}">All sample events</a>
+  </p>
 {% endblock %}

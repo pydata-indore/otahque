@@ -6,17 +6,19 @@
 {% block content %}
   <h1>Sample events</h1>
   <p>These fictional events are examples.</p>
-  <ul class="event-list">
+  <ul class="event-list space-y-3">
     {% for event in events %}
       {% partialdef event-row inline %}
-        <li class="event-row">
+        <li class="event-row card border border-base-300
+                   bg-base-100 p-4 font-semibold">
           <a href="{% url 'events:detail' event.id %}">
             {{ event.title|sample_label }}
           </a>
         </li>
       {% endpartialdef %}
     {% empty %}
-      <li class="event-empty">No sample events yet.</li>
+      <li class="event-empty card border border-base-300
+                 bg-base-100 p-4">No sample events yet.</li>
     {% endfor %}
   </ul>
 {% endblock %}

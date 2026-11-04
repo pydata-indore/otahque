@@ -232,3 +232,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node packages, rebuilt from package-lock.json by npm ci
+node_modules/

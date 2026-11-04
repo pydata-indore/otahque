@@ -36,6 +36,10 @@ change that breaks one.
 
 - Python 3.14.9, Django 6.1.2, python-decouple 3.8, locked in `uv.lock`
   and managed with uv 0.13.5. See [VERSION_BASELINE.md](VERSION_BASELINE.md).
+- From Chapter 14: Node.js 26.13.0 builds the stylesheet with Tailwind
+  CSS 4.3.4 and daisyUI 5.7.50, pinned exactly in `package-lock.json`.
+  `site.css` is generated: change `source.css` or a template, then run
+  `npm run build`.
 - No new dependency, and no upgrade, without the author's decision.
 - Never use an API from a later Django version than the pinned one.
 
