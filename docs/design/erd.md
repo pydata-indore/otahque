@@ -21,6 +21,7 @@ erDiagram
         int id PK
         text title
         datetime starts_at "an instant, in UTC"
+        datetime ends_at "after starts_at, in UTC"
         text timezone "IANA name"
         text location
         int capacity "more than 0"
@@ -54,8 +55,9 @@ erDiagram
   its status and cancelled_at; it is never deleted.
 - PR-4: at most one current assignment per member and
   event (partial unique index where revoked_at is empty).
-- Capacity is more than 0; each status comes from its
-  fixed list (CHECK constraints).
+- Capacity is more than 0; an event ends after it
+  starts; each status comes from its fixed list
+  (CHECK constraints).
 - Intent: deleting an event or member that has
   registrations is refused, so history survives.
 
