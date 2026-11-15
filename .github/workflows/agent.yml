@@ -64,7 +64,26 @@ jobs:
           MAX_ATTEMPTS: "3"
           REVIEW_ROUNDS: "2"
           QODO_WAIT_MINUTES: "20"
+          RUN_MINUTES: "75"
         run: python3 factory/agent_runner.py
+
+      # The runner stops itself at RUN_MINUTES; this covers a
+      # job that was cancelled or hit timeout-minutes anyway.
+      - name: Report a cancelled or timed-out run
+        if: cancelled()
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: >-
+            ${{ github.server_url }}/${{ github.repository
+            }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue edit "$ISSUE" -R "$GITHUB_REPOSITORY" \
+            --add-label agent-blocked \
+            --remove-label agent-working
+          gh issue comment "$ISSUE" -R "$GITHUB_REPOSITORY" \
+            --body "The agent run was cancelled or timed out: \
+          $RUN_URL"
 
       - name: Keep the run log
         if: always()
