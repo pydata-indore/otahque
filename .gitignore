@@ -235,3 +235,6 @@ __marimo__/
 
 # Node packages, rebuilt from package-lock.json by npm ci
 node_modules/
+
+# The agent run log, uploaded by the workflow
+factory-log.md
