@@ -34,8 +34,13 @@ the issue number.
 
 - Up to 3 attempts per step (`MAX_ATTEMPTS`).
 - Up to 2 rounds of review fixes (`REVIEW_ROUNDS`).
-- 20 minutes to wait for Qodo (`QODO_WAIT_MINUTES`), and
-  90 minutes for the whole job.
+- 20 minutes to wait for Qodo (`QODO_WAIT_MINUTES`).
+- 75 minutes for the runner (`RUN_MINUTES`), inside the job's
+  90 minutes; a cancelled or timed-out job still labels the
+  issue `agent-blocked`.
+- The new tests must fail for the missing code: a syntax
+  error, or a failure in tests that existed before, is sent
+  back to the model.
 
 When a limit is hit, the model answers `BLOCKED`, or Qodo does
 not reply, the issue gets `agent-blocked` and a comment with the
@@ -56,3 +61,6 @@ Under Settings, Secrets and variables, Actions:
 Without `AGENT_GH_TOKEN`, PRs and comments come from
 `github-actions[bot]`. The checks run without any token or key
 in their environment, and the checkout keeps no credentials.
+Git runs with hooks turned off, and the run refuses to commit
+or push if `.git/config` or `.git/hooks` changed while the
+generated code ran.

@@ -27,6 +27,10 @@ MAX_ATTEMPTS = int(os.environ.get('MAX_ATTEMPTS', '3'))
 REVIEW_ROUNDS = int(os.environ.get('REVIEW_ROUNDS', '2'))
 QODO_WAIT = 60 * int(os.environ.get('QODO_WAIT_MINUTES', '20'))
 MAX_LINE = 65
+# Stop with a reason before the job's own timeout kills us.
+RUN_DEADLINE = time.time() + 60 * int(
+    os.environ.get('RUN_MINUTES', '75'))
+GIT_STATE = None
 
 # The agent may change only these paths.
 ALLOWED = (
@@ -100,6 +104,12 @@ def gh_json(path):
 
 def now():
     return datetime.now(timezone.utc)
+
+
+def out_of_time():
+    if time.time() >= RUN_DEADLINE:
+        raise Blocked('The run reached its time limit '
+                      '(RUN_MINUTES).')
 
 
 def tail(text, lines=40):
@@ -288,6 +298,23 @@ def run_checks():
     return passed, '\n\n'.join(report)
 
 
+def fails_for_new_code(out):
+    """True if a new test fails, or the new code is missing.
+
+    A missing name (ImportError, AttributeError) means the
+    code under test does not exist yet; otherwise one of the
+    test methods added in this run must be among the failures.
+    """
+    if re.search(r'cannot import name|has no attribute'
+                 r'|No module named', out):
+        return True
+    code, added = run(['git', 'diff', '-U0', '--', 'events'])
+    names = re.findall(r'^\+\s*def (test_\w+)', added, re.M)
+    failed = re.findall(r'^(?:FAIL|ERROR): (test_\w+)',
+                        out, re.M)
+    return bool(set(names) & set(failed))
+
+
 def test_count(report):
     found = re.search(r'Ran (\d+) tests?', report)
     return found.group(1) if found else '?'
@@ -297,8 +324,9 @@ def test_count(report):
 
 RULES = """You are the coding agent of the Otahque factory.
 The code is printed in a beginner's Django book, so follow the
-project rules in AGENTS.md exactly. You cannot run commands: a script applies
-your edits and runs the checks, then shows you the results.
+project rules in AGENTS.md exactly. You cannot run commands:
+a script applies your edits and runs the checks, then shows
+you the results.
 
 Answer ONLY with edit blocks in this exact form:
 
@@ -331,6 +359,7 @@ def edit_loop(messages, allowed, verify, stage):
     verify() returns (ok, report). Returns the last report.
     """
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        out_of_time()
         log(f'- {stage}: attempt {attempt} of {MAX_ATTEMPTS}')
         reply = ask(messages)
         reason = blocked_reason(reply)
@@ -405,8 +434,25 @@ def comment(kind, number, text):
        '--body-file', '-', data=text)
 
 
+def git_state():
+    """Git config and hooks, which generated code must not
+    change."""
+    git = ROOT / '.git'
+    hooks = sorted(
+        p.name for p in (git / 'hooks').iterdir()
+        if not p.name.endswith('.sample'))
+    return (git / 'config').read_bytes(), hooks
+
+
+def guard_git():
+    if git_state() != GIT_STATE:
+        raise Blocked('.git/config or .git/hooks changed during '
+                      'the run; not committing or pushing.')
+
+
 def git_identity():
     return [
+        '-c', 'core.hooksPath=/dev/null',
         '-c', 'user.name=otahque-agent',
         '-c', 'user.email=41898282+github-actions[bot]'
         '@users.noreply.github.com',
@@ -416,6 +462,7 @@ def git_identity():
 def commit(message):
     if BANNED.search(message):
         message = 'Apply the change requested in #' + ISSUE
+    guard_git()
     run(['git', 'add', '-A', '--', '.', ':!factory-log.md'])
     code, out = run(
         ['git', *git_identity(), 'commit', '-q', '-m', message])
@@ -426,12 +473,17 @@ def commit(message):
 
 
 def push(branch):
+    guard_git()
     token = os.environ['GH_TOKEN']
     remote = (f'https://x-access-token:{token}'
               f'@github.com/{REPO}.git')
+    # No hooks, and no token or key in the environment: the
+    # only credential is the one in the push URL.
     done = subprocess.run(
-        ['git', 'push', remote, f'HEAD:refs/heads/{branch}'],
-        cwd=ROOT, capture_output=True, text=True, timeout=120)
+        ['git', '-c', 'core.hooksPath=/dev/null', 'push',
+         remote, f'HEAD:refs/heads/{branch}'],
+        cwd=ROOT, env=safe_env(), capture_output=True,
+        text=True, timeout=120)
     if done.returncode:
         raise Blocked('git push failed:\n'
                       + done.stderr.replace(token, '***'))
@@ -462,7 +514,7 @@ def is_qodo(item):
 def wait_for_review(pr, since):
     """Wait for Qodo's review comment to appear or be updated."""
     stamp = since.strftime('%Y-%m-%dT%H:%M:%SZ')
-    deadline = time.time() + QODO_WAIT
+    deadline = min(time.time() + QODO_WAIT, RUN_DEADLINE)
     while time.time() < deadline:
         time.sleep(30)
         for item in gh_json(
@@ -474,6 +526,7 @@ def wait_for_review(pr, since):
                     and re.search(r'\(\d+\)', body)):
                 time.sleep(60)  # let the edit settle
                 return item['id']
+    out_of_time()
     raise Blocked(
         f'Qodo did not review PR #{pr} within '
         f'{QODO_WAIT // 60} minutes.')
@@ -481,10 +534,12 @@ def wait_for_review(pr, since):
 
 def review_text(pr, comment_id):
     main = gh_json(f'repos/{REPO}/issues/comments/{comment_id}')
+    # Qodo strikes through a finding once it is resolved; such
+    # inline comments are left out so they are not fixed twice.
     inline = [
         f'{c["path"]}:{c.get("line")}\n{plain(c["body"])}'
         for c in gh_json(f'repos/{REPO}/pulls/{pr}/comments')
-        if is_qodo(c)
+        if is_qodo(c) and '<s>' not in c['body']
     ]
     text = plain(main['body']) + '\n\n' + '\n\n'.join(inline)
     return text[:20000]
@@ -498,6 +553,8 @@ def main():
     if RUN_URL:
         log(f'Run: {RUN_URL}\n')
     ensure_labels()
+    global GIT_STATE
+    GIT_STATE = git_state()
     issue = json.loads(gh(
         'issue', 'view', ISSUE, '-R', REPO,
         '--json', 'title,body,state'))
@@ -544,6 +601,17 @@ def main():
             return False, (
                 'The tests PASS without the new code, so they '
                 'do not test it. Make them fail now.\n'
+                + tail(out))
+        if re.search(r'SyntaxError|IndentationError', out):
+            return False, (
+                'The test file does not run at all. Fix it so '
+                'the tests fail only for the missing code.\n'
+                + tail(out))
+        if not fails_for_new_code(out):
+            return False, (
+                'The tests fail, but not because of the new '
+                'code: no new test fails and nothing the '
+                'ticket adds is missing. Fix the tests.\n'
                 + tail(out))
         tests_fail.output = out
         return True, out
