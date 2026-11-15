@@ -1,0 +1,75 @@
+# Starts the coding agent when an issue gets the label
+# ready-for-agent, or by hand from the Actions tab.
+# What the agent does: factory/README.md.
+name: Agent
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to work on
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: agent-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'ready-for-agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install the locked environment
+        run: uv sync --locked
+
+      - name: Create .env for the checks
+        run: |
+          key=$(python3 -c \
+            'import secrets; print(secrets.token_urlsafe(50))')
+          {
+            echo "DJANGO_SECRET_KEY=$key"
+            echo "DJANGO_DEBUG=True"
+            echo "DJANGO_ALLOWED_HOSTS="
+          } > .env
+
+      - name: Run the agent
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          REPO: ${{ github.repository }}
+          RUN_URL: >-
+            ${{ github.server_url }}/${{ github.repository
+            }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: >-
+            ${{ secrets.AGENT_GH_TOKEN || secrets.GITHUB_TOKEN }}
+          EURI_API_KEY: ${{ secrets.EURI_API_KEY }}
+          EURI_MODEL: ${{ vars.EURI_MODEL }}
+          EURI_BASE_URL: ${{ vars.EURI_BASE_URL }}
+          MAX_ATTEMPTS: "3"
+          REVIEW_ROUNDS: "2"
+          QODO_WAIT_MINUTES: "20"
+        run: python3 factory/agent_runner.py
+
+      - name: Keep the run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-log-${{ github.run_id }}
+          path: factory-log.md
+          if-no-files-found: ignore
