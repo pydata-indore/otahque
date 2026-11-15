@@ -138,6 +138,9 @@ def ask(messages):
             'Authorization':
                 'Bearer ' + os.environ['EURI_API_KEY'],
             'Content-Type': 'application/json',
+            # The API's firewall refuses urllib's default
+            # User-Agent with 403, error code 1010.
+            'User-Agent': 'otahque-agent/1.0',
         },
     )
     for wait in (10, 30, 60, None):
