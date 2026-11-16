@@ -42,9 +42,14 @@ marked "not part of the project", practice scripts, and other
 chapters are left out. The model uses them to match names,
 structure and style; it never edits them, and the ticket,
 `AGENTS.md` and the 65-character limit come first. A title with
-no chapter number gets no reference. Change the source with
-`REFERENCE_REPO` and `REFERENCE_REF`. If the fetch fails, the run
-logs it and continues without the reference.
+no chapter number gets no reference. The brief marks the
+reference as untrusted data, and the source is pinned to a
+reviewed book commit, not `main`. To change it, set the Actions
+variables `REFERENCE_REPO` and `REFERENCE_REF` (Settings,
+Secrets and variables, Actions, Variables); unset, the pinned
+defaults apply, and the pin is moved by a reviewed change. The
+fetch has a 2 minute budget. If it fails or runs out, the run
+logs it and continues without the rest.
 
 ## Limits and stopping
 
