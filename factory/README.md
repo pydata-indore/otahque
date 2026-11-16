@@ -30,6 +30,17 @@ the issue number.
 9. A summary comment on the PR lists every verdict. A human
    reviews and merges.
 
+## Reference code
+
+Each run fetches read-only files from the published book
+repository, `SamChawla/otahque-web-book` (`app/`: models, forms,
+views, URLs, admin, templates, design notes and tests), and adds
+them to the model's brief. The model uses them to match naming,
+structure and style. They are never edited, and the ticket,
+`AGENTS.md` and the 65-character limit come first. Change the
+source with `REFERENCE_REPO` and `REFERENCE_REF`. If the fetch
+fails, the run logs it and continues without the reference.
+
 ## Limits and stopping
 
 - Up to 3 attempts per step (`MAX_ATTEMPTS`).

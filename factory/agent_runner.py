@@ -31,6 +31,19 @@ MAX_LINE = 65
 RUN_DEADLINE = time.time() + 60 * int(
     os.environ.get('RUN_MINUTES', '75'))
 GIT_STATE = None
+# Read-only reference: the published book's code, fetched for
+# each run. It guides style and structure; it is never edited.
+REFERENCE_REPO = os.environ.get(
+    'REFERENCE_REPO', 'SamChawla/otahque-web-book')
+REFERENCE_REF = os.environ.get('REFERENCE_REF', 'main')
+REFERENCE_FILE_LIMIT = 12000
+REFERENCE_TOTAL_LIMIT = 60000
+REFERENCE_PATHS = re.compile(
+    r'app/(README\.md|docs/[\w/.-]+\.md'
+    r'|(events|accounts|registrations|config)/'
+    r'(?!migrations/)[\w/]*(models|forms|views|urls|admin'
+    r'|tests)\.py'
+    r'|(events/)?templates/[\w/]+\.html)$')
 
 # The agent may change only these paths.
 ALLOWED = (
@@ -265,7 +278,7 @@ def long_lines(paths):
             if len(line) > MAX_LINE:
                 problems.append(
                     f'{path}:{number} has {len(line)} '
-                    'characters')
+                    f'characters. The line is:\n{line}')
     return problems
 
 
@@ -348,12 +361,67 @@ with one line: BLOCKED: <the reason>.
 """
 
 
+REFERENCE_NOTE = (
+    '\n\n# Reference (read only)\n\n'
+    'These files come from the published book repository. '
+    'Use them to match naming, structure and style when the '
+    'ticket needs the same kind of code. Never edit them and '
+    'do not copy anything the ticket does not ask for. The '
+    'ticket, AGENTS.md and the 65-character limit come first '
+    'if they disagree.\n\n')
+REFERENCE_TEXT = None
+
+
+def reference_text():
+    """Return the book's code as read-only reference text.
+
+    Failure never stops a run: the ticket and this repository's
+    own files are enough, so report it and carry on.
+    """
+    try:
+        tree = json.loads(gh(
+            'api', f'repos/{REFERENCE_REPO}/git/trees/'
+            f'{REFERENCE_REF}?recursive=1'))['tree']
+        # Tests last, so the size limit trims them first.
+        paths = sorted(
+            (item['path'] for item in tree
+             if item['type'] == 'blob'
+             and REFERENCE_PATHS.fullmatch(item['path'])),
+            key=lambda p: (p.endswith('tests.py'), p))
+        parts, total = [], 0
+        for path in paths:
+            text = gh(
+                'api', '-H',
+                'Accept: application/vnd.github.raw',
+                f'repos/{REFERENCE_REPO}/contents/{path}'
+                f'?ref={REFERENCE_REF}')
+            text = text[:REFERENCE_FILE_LIMIT]
+            if total + len(text) > REFERENCE_TOTAL_LIMIT:
+                break
+            total += len(text)
+            parts.append(
+                f'--- {REFERENCE_REPO}:{path} ---\n{text}')
+        log(f'- Reference: {len(parts)} files from '
+            f'{REFERENCE_REPO}@{REFERENCE_REF}')
+        return '\n\n'.join(parts)
+    except (RuntimeError, ValueError, KeyError,
+            subprocess.SubprocessError) as error:
+        log(f'- Reference unavailable, continuing without: '
+            f'{error}')
+        return ''
+
+
 def project_brief(issue):
+    global REFERENCE_TEXT
+    if REFERENCE_TEXT is None:
+        REFERENCE_TEXT = reference_text()
     return (
         f'# Ticket #{ISSUE}: {issue["title"]}\n\n'
         f'{issue["body"]}\n\n# Project files\n\n'
         + file_text(CONTEXT) + '\n\n# Code\n\n'
-        + file_text(code_files()))
+        + file_text(code_files())
+        + (REFERENCE_NOTE + REFERENCE_TEXT
+           if REFERENCE_TEXT else ''))
 
 
 def edit_loop(messages, allowed, verify, stage):
@@ -380,6 +448,13 @@ def edit_loop(messages, allowed, verify, stage):
             if ok:
                 return report
             feedback = 'The checks failed:\n\n' + report
+            if 'Lines over' in report:
+                feedback += (
+                    '\n\nFor each long line, send a block whose '
+                    'SEARCH is that exact line and whose '
+                    'REPLACE splits or shortens it to at most '
+                    f'{MAX_LINE} characters. Count the '
+                    'characters; do not change other lines.')
             log('  - Checks failed:\n' + fence(tail(report, 25)))
         messages.append({'role': 'user', 'content': (
             feedback + '\n\nCurrent files you changed:\n\n'
