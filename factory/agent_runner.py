@@ -36,14 +36,15 @@ GIT_STATE = None
 REFERENCE_REPO = os.environ.get(
     'REFERENCE_REPO', 'SamChawla/otahque-web-book')
 REFERENCE_REF = os.environ.get('REFERENCE_REF', 'main')
-REFERENCE_FILE_LIMIT = 12000
-REFERENCE_TOTAL_LIMIT = 60000
-REFERENCE_PATHS = re.compile(
-    r'app/(README\.md|docs/[\w/.-]+\.md'
-    r'|(events|accounts|registrations|config)/'
-    r'(?!migrations/)[\w/]*(models|forms|views|urls|admin'
-    r'|tests)\.py'
-    r'|(events/)?templates/[\w/]+\.html)$')
+REFERENCE_TOTAL_LIMIT = 50000
+LISTING = re.compile(
+    r'<p class="code-label code-label--file"[^>]*>([^<]*)</p>'
+    r'\s*<pre class="code-listing code-listing--file"[^>]*>'
+    r'<code>(.*?)</code>', re.S)
+SKIP_LABEL = re.compile(
+    r'not part of the project|^illustration_only|^\.\./')
+PROJECT_FILE = re.compile(
+    r'\w[\w/.-]*\.(py|html|md|js|css|json|toml)')
 
 # The agent may change only these paths.
 ALLOWED = (
@@ -105,6 +106,7 @@ def gh(*args, data=None):
     done = subprocess.run(
         ['gh', *args], cwd=ROOT, input=data,
         capture_output=True, text=True, timeout=120,
+        encoding='utf-8',
     )
     if done.returncode:
         raise RuntimeError(f'gh {args[0]}: {done.stderr}')
@@ -363,46 +365,59 @@ with one line: BLOCKED: <the reason>.
 
 REFERENCE_NOTE = (
     '\n\n# Reference (read only)\n\n'
-    'These files come from the published book repository. '
-    'Use them to match naming, structure and style when the '
-    'ticket needs the same kind of code. Never edit them and '
-    'do not copy anything the ticket does not ask for. The '
-    'ticket, AGENTS.md and the 65-character limit come first '
-    'if they disagree.\n\n')
+    'These are the code listings that the published book '
+    "prints for this ticket's chapter only. Use them to match "
+    'names, structure and style. Never edit them and do not '
+    'copy anything the ticket does not ask for. The ticket, '
+    'AGENTS.md and the 65-character limit come first if they '
+    'disagree.\n\n')
 REFERENCE_TEXT = None
 
 
-def reference_text():
-    """Return the book's code as read-only reference text.
+def reference_text(issue):
+    """Return the chapter's book listings as read-only text.
 
-    Failure never stops a run: the ticket and this repository's
-    own files are enough, so report it and carry on.
+    Only the chapter named in the ticket title is used, because
+    the book repository is ahead of this one. Failure never
+    stops a run: report it and carry on without the reference.
     """
+    found = re.search(r'Chapter (\d+)', issue['title'])
+    if not found:
+        log('- Reference skipped: no chapter in the title')
+        return ''
+    number = int(found[1])
+    folder = f'site/chapters/chapter{number:02d}/section-'
     try:
         tree = json.loads(gh(
             'api', f'repos/{REFERENCE_REPO}/git/trees/'
             f'{REFERENCE_REF}?recursive=1'))['tree']
-        # Tests last, so the size limit trims them first.
-        paths = sorted(
-            (item['path'] for item in tree
-             if item['type'] == 'blob'
-             and REFERENCE_PATHS.fullmatch(item['path'])),
-            key=lambda p: (p.endswith('tests.py'), p))
+        pages = sorted(
+            item['path'] for item in tree
+            if item['type'] == 'blob'
+            and item['path'].startswith(folder)
+            and item['path'].endswith('/index.html'))
         parts, total = [], 0
-        for path in paths:
-            text = gh(
+        for page in pages:
+            raw = gh(
                 'api', '-H',
                 'Accept: application/vnd.github.raw',
-                f'repos/{REFERENCE_REPO}/contents/{path}'
+                f'repos/{REFERENCE_REPO}/contents/{page}'
                 f'?ref={REFERENCE_REF}')
-            text = text[:REFERENCE_FILE_LIMIT]
-            if total + len(text) > REFERENCE_TOTAL_LIMIT:
-                break
-            total += len(text)
-            parts.append(
-                f'--- {REFERENCE_REPO}:{path} ---\n{text}')
-        log(f'- Reference: {len(parts)} files from '
-            f'{REFERENCE_REPO}@{REFERENCE_REF}')
+            section = page.split('/')[-2]
+            for label, code in LISTING.findall(raw):
+                label = html.unescape(label).strip()
+                if (SKIP_LABEL.search(label)
+                        or not PROJECT_FILE.match(label)):
+                    continue
+                text = html.unescape(code)
+                if total + len(text) > REFERENCE_TOTAL_LIMIT:
+                    break
+                total += len(text)
+                parts.append(
+                    f'--- {label} (book {section}) ---\n'
+                    + text)
+        log(f'- Reference: {len(parts)} listings from '
+            f'chapter {number} of {REFERENCE_REPO}')
         return '\n\n'.join(parts)
     except (RuntimeError, ValueError, KeyError,
             subprocess.SubprocessError) as error:
@@ -414,7 +429,7 @@ def reference_text():
 def project_brief(issue):
     global REFERENCE_TEXT
     if REFERENCE_TEXT is None:
-        REFERENCE_TEXT = reference_text()
+        REFERENCE_TEXT = reference_text(issue)
     return (
         f'# Ticket #{ISSUE}: {issue["title"]}\n\n'
         f'{issue["body"]}\n\n# Project files\n\n'

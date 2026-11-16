@@ -32,14 +32,19 @@ the issue number.
 
 ## Reference code
 
-Each run fetches read-only files from the published book
-repository, `SamChawla/otahque-web-book` (`app/`: models, forms,
-views, URLs, admin, templates, design notes and tests), and adds
-them to the model's brief. The model uses them to match naming,
-structure and style. They are never edited, and the ticket,
-`AGENTS.md` and the 65-character limit come first. Change the
-source with `REFERENCE_REPO` and `REFERENCE_REF`. If the fetch
-fails, the run logs it and continues without the reference.
+The published book repository, `SamChawla/otahque-web-book`, is
+ahead of this one, so a run uses only the chapter named in the
+ticket title ("Chapter 16: ..."). It fetches that chapter's
+section pages and keeps the project-file listings the chapter
+prints (`events/models.py`, `events/tests.py`, and so on), and
+adds them to the model's brief as read-only reference. Listings
+marked "not part of the project", practice scripts, and other
+chapters are left out. The model uses them to match names,
+structure and style; it never edits them, and the ticket,
+`AGENTS.md` and the 65-character limit come first. A title with
+no chapter number gets no reference. Change the source with
+`REFERENCE_REPO` and `REFERENCE_REF`. If the fetch fails, the run
+logs it and continues without the reference.
 
 ## Limits and stopping
 
