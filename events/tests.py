@@ -250,3 +250,20 @@ class EventModelTests(SimpleTestCase):
                 "Value 'archived' is not a valid choice."
             ]},
         )
+
+    def test_ends_at_after_starts_at(self):
+        event = self.make_event()
+        event.full_clean()
+
+    def test_ends_at_before_starts_at_fails(self):
+        event = self.make_event()
+        event.starts_at = datetime(2026, 11, 19, 20, 30,
+                                  tzinfo=UTC)
+        event.ends_at = datetime(2026, 11, 19, 18, 30,
+                                tzinfo=UTC)
+        with self.assertRaises(ValidationError) as caught:
+            event.full_clean()
+        self.assertEqual(
+            caught.exception.message_dict,
+            {'ends_at': ['ends_at must be after starts_at']},
+        )

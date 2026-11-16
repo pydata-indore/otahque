@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -26,3 +27,13 @@ class Event(models.Model):
 
     def __str__(self):
         return self.title
+
+    def clean(self):
+        super().clean()
+        if self.ends_at and self.starts_at:
+            if self.ends_at <= self.starts_at:
+                raise ValidationError(
+                    {'ends_at': [
+                        'ends_at must be after starts_at'
+                    ]}
+                )
