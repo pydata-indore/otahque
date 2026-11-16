@@ -1,13 +1,16 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.staticfiles import finders
+from django.core.exceptions import ValidationError
 from django.template import Context, Template
 from django.template.loader import render_to_string
 from django.test import SimpleTestCase
 from django.urls import resolve, reverse
 
 from . import views
+from .models import Event
 
 
 class RoutingTests(SimpleTestCase):
@@ -212,4 +215,38 @@ class DesignSystemTests(SimpleTestCase):
         self.assertTrue(
             '.navbar {' in css,
             'site.css has no .navbar rule',
+        )
+
+
+class EventModelTests(SimpleTestCase):
+    def make_event(self, **changes):
+        fields = {
+            'title': 'Python meetup',
+            'starts_at': datetime(2026, 11, 19, 18, 30,
+                                  tzinfo=UTC),
+            'ends_at': datetime(2026, 11, 19, 20, 30,
+                                tzinfo=UTC),
+            'timezone': 'Europe/London',
+            'location': 'Virtual',
+            'capacity': 40,
+        }
+        fields.update(changes)
+        return Event(**fields)
+
+    def test_str_is_title(self):
+        event = self.make_event()
+        self.assertEqual(str(event), 'Python meetup')
+
+    def test_status_starts_draft_and_is_checked(self):
+        event = self.make_event()
+        self.assertEqual(event.status, Event.Status.DRAFT)
+        event.full_clean()
+        event.status = 'archived'
+        with self.assertRaises(ValidationError) as caught:
+            event.full_clean()
+        self.assertEqual(
+            caught.exception.message_dict,
+            {'status': [
+                "Value 'archived' is not a valid choice."
+            ]},
         )
