@@ -26,7 +26,10 @@ the issue number.
    checks.
 8. It waits for Qodo's review, sorts each open finding into
    confirmed or dismissed, fixes the confirmed ones in a new
-   commit, runs the checks, and posts `/agentic_review`.
+   commit, runs the checks, and posts `/agentic_review`. A
+   Qodo comment that shows only resolved findings counts as a
+   finished review: the run then logs that nothing is open and
+   writes its summary.
 9. A summary comment on the PR lists every verdict. A human
    reviews and merges.
 
@@ -65,7 +68,10 @@ logs it and continues without the rest.
 
 When a limit is hit, the model answers `BLOCKED`, or Qodo does
 not reply, the issue gets `agent-blocked` and a comment with the
-reason. The run never force-pushes, never merges, and never
+reason: no Qodo reply at all points to the PR or comments not
+coming from a user account (`AGENT_GH_TOKEN`), while a Qodo
+comment the run cannot read is reported separately. The run
+never force-pushes, never merges, and never
 reuses an existing branch.
 
 ## Settings

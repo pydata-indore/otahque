@@ -625,24 +625,40 @@ def is_qodo(item):
 
 
 def wait_for_review(pr, since):
-    """Wait for Qodo's review comment to appear or be updated."""
+    """Wait for Qodo's review comment to appear or be updated.
+
+    Return (comment id, has_open). A review with open findings
+    shows a count such as "Bugs (2)". Once every finding is
+    resolved the count disappears and only "Resolved findings"
+    remain; that is a finished review with nothing left to fix.
+    """
     stamp = since.strftime('%Y-%m-%dT%H:%M:%SZ')
     deadline = min(time.time() + QODO_WAIT, RUN_DEADLINE)
+    heard = False
     while time.time() < deadline:
         time.sleep(30)
         for item in gh_json(
                 f'repos/{REPO}/issues/{pr}/comments'):
             body = item['body']
-            if (is_qodo(item)
-                    and 'Code Review by Qodo' in body
-                    and item['updated_at'] >= stamp
-                    and re.search(r'\(\d+\)', body)):
+            if not is_qodo(item) or item['updated_at'] < stamp:
+                continue
+            heard = True
+            if 'Code Review by Qodo' not in body:
+                continue
+            has_open = bool(re.search(r'\(\d+\)', body))
+            if has_open or 'Resolved' in body:
                 time.sleep(60)  # let the edit settle
-                return item['id']
+                return item['id'], has_open
     out_of_time()
+    if heard:
+        raise Blocked(
+            f'Qodo commented on PR #{pr} but posted no review '
+            f'I could read within {QODO_WAIT // 60} minutes.')
     raise Blocked(
-        f'Qodo did not review PR #{pr} within '
-        f'{QODO_WAIT // 60} minutes.')
+        f'Qodo did not respond on PR #{pr} within '
+        f'{QODO_WAIT // 60} minutes. Check that the PR and the '
+        'review comment come from a user account '
+        '(AGENT_GH_TOKEN).')
 
 
 def review_text(pr, comment_id):
@@ -809,7 +825,11 @@ def review(pr, branch, issue, messages, since):
     verdicts = []
     for round_ in range(1, REVIEW_ROUNDS + 2):
         log(f'### 5.{round_} Qodo review')
-        comment_id = wait_for_review(pr, since)
+        comment_id, has_open = wait_for_review(pr, since)
+        if not has_open:
+            log('- Qodo shows no open findings.\n')
+            finish(pr, verdicts, round_ - 1, blocked=None)
+            return
         findings = review_text(pr, comment_id)
         triage = ask_json([
             {'role': 'system', 'content': RULES.split(
