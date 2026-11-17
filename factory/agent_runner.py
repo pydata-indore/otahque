@@ -766,12 +766,13 @@ def main():
     log(f'- All checks pass: {test_count(report)} tests\n')
 
     log('### 4. Acceptance criteria')
+    ticket = ticket_criteria(issue['body'])
     for check_pass in (1, 2):
         checked = accept(issue, report, red)
         unmet = [c for c in checked['criteria']
                  if not c['met']]
         rows = '\n'.join(
-            f'| {c["n"]} | {c["criterion"]} | '
+            f'| {c["n"]} | {criterion_label(c, ticket)} | '
             f'{"Met" if c["met"] else "NOT met"}: '
             f'{c["observed"]} |' for c in checked['criteria'])
         log('| # | Criterion | Observed |\n|---|---|---|\n'
@@ -881,6 +882,29 @@ def review(pr, branch, issue, messages, since):
         'fix rounds.'))
 
 
+def ticket_criteria(body):
+    """Map criterion numbers to the first line of the ticket text."""
+    found = re.search(
+        r'## Acceptance criteria\n(.*?)(?=\n## |\Z)', body, re.S)
+    items = re.findall(
+        r'^(\d+)\. (.+)$', found[1] if found else '', re.M)
+    return {int(n): text.strip() for n, text in items}
+
+
+def criterion_label(c, ticket):
+    """The criterion's text; the ticket's own words if missing.
+
+    A model may copy the placeholder word from the prompt's
+    JSON example instead of describing the criterion.
+    """
+    text = str(c.get('criterion', '')).strip()
+    if text.lower() in ('', 'short'):
+        text = ticket.get(c['n']) or f'Criterion {c["n"]}'
+    if len(text) > 70:
+        text = text[:67].rstrip() + '...'
+    return text.replace('|', '/')
+
+
 def accept(issue, report, red):
     """Ask a fresh conversation to check every criterion."""
     return ask_json([
@@ -897,7 +921,8 @@ def accept(issue, report, red):
             'failing-test output above in the PR body; '
             'judge those criteria on that basis.\n\n'
             'Return JSON: {"criteria": [{"n": 1, '
-            '"criterion": "short", "met": true, "observed": '
+            '"criterion": "the criterion in about eight '
+            'words", "met": true, "observed": '
             '"evidence"}], "commit": "plain one-line commit '
             'message, imperative, no tool names", "bullets": '
             '["`file`: what changed"]}')},
