@@ -884,6 +884,8 @@ def review(pr, branch, issue, messages, since):
 
 def ticket_criteria(body):
     """Map each criterion number to its first ticket line."""
+    # The web editor often saves the body with CRLF endings.
+    body = (body or '').replace('\r\n', '\n')
     found = re.search(
         r'## Acceptance criteria\n(.*?)(?=\n## |\Z)', body, re.S)
     items = re.findall(
@@ -897,8 +899,9 @@ def criterion_label(c, ticket):
     A model may copy the placeholder word from the prompt's
     JSON example instead of describing the criterion.
     """
-    text = str(c.get('criterion', '')).strip()
-    if text.lower() in ('', 'short'):
+    # A JSON null arrives as None, not as a string.
+    text = str(c.get('criterion') or '').strip()
+    if text.lower() in ('', 'short', 'none', 'null'):
         text = ticket.get(c['n']) or f'Criterion {c["n"]}'
     if len(text) > 70:
         text = text[:67].rstrip() + '...'
