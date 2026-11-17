@@ -883,7 +883,7 @@ def review(pr, branch, issue, messages, since):
 
 
 def ticket_criteria(body):
-    """Map criterion numbers to the first line of the ticket text."""
+    """Map each criterion number to its first ticket line."""
     found = re.search(
         r'## Acceptance criteria\n(.*?)(?=\n## |\Z)', body, re.S)
     items = re.findall(
