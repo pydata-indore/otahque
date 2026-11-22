@@ -222,40 +222,50 @@ def blocked_reason(text):
 
 
 def apply_edits(text, allowed):
-    """Apply every edit block; return the paths changed."""
+    """Apply every edit block, or none; return the paths changed.
+
+    Each block is checked against an in-memory copy first, so a
+    bad block leaves every file as it was and the agent can
+    resend the whole reply.
+    """
     edits = list(EDIT.finditer(text))
     if not edits:
         raise ValueError('No FILE/SEARCH/REPLACE blocks found.')
-    changed = []
+    pending = {}
     for edit in edits:
         path = edit['path']
         if not allowed(path):
             raise ValueError(f'{path} may not be changed now.')
         target = ROOT / path
+        if path in pending:
+            old = pending[path]
+        elif target.is_file():
+            old = target.read_text(encoding='utf-8')
+        else:
+            old = None
         search, replace = edit['search'], edit['replace']
         if not search.strip():
-            if target.exists():
+            if old is not None or target.exists():
                 raise ValueError(
                     f'{path} exists: give a SEARCH block.')
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(replace, encoding='utf-8')
+            pending[path] = replace
         else:
             # A model may assume a file that a command such as
             # startapp would create; tell it instead of crashing.
-            if not target.is_file():
+            if old is None:
                 raise ValueError(
                     f'{path} does not exist yet: leave SEARCH '
                     'empty to create it.')
-            old = target.read_text(encoding='utf-8')
             if old.count(search) != 1:
                 raise ValueError(
                     f'SEARCH text in {path} must match exactly'
                     ' once; copy it from the current file.')
-            target.write_text(
-                old.replace(search, replace),
-                encoding='utf-8')
-        changed.append(path)
-    return changed
+            pending[path] = old.replace(search, replace)
+    for path, new in pending.items():
+        target = ROOT / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(new, encoding='utf-8')
+    return list(pending)
 
 
 def may_edit(path):
@@ -903,9 +913,10 @@ def main():
         'that make every test pass and meet each acceptance '
         'criterion. Do NOT change any test file now: if a '
         'test is wrong, answer BLOCKED. No command such as '
-        'startapp has run: a file not listed below does not '
-        'exist yet, so create it with an empty SEARCH. '
-        'Current files:\n\n'
+        'startapp has run: a file that such a command would '
+        'create does not exist unless it is shown below or in '
+        'the project files above, so create it with an empty '
+        'SEARCH. Current files:\n\n'
         + step_files())})
 
     def no_test_edits(path):
