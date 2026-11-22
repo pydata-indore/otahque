@@ -1,3 +1,4 @@
+"""Tests for the events app."""
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,8 @@ from .models import Event
 
 
 class RoutingTests(SimpleTestCase):
+    """Each address reaches its view; others are not found."""
+
     def test_home(self):
         response = self.client.get('/')
         self.assertContains(
@@ -44,6 +47,8 @@ class RoutingTests(SimpleTestCase):
 
 
 class EventDetailTests(SimpleTestCase):
+    """One event by number, and the 404 for any other."""
+
     def test_sample_event(self):
         response = self.client.get('/events/1/')
         self.assertContains(
@@ -75,6 +80,8 @@ class EventDetailTests(SimpleTestCase):
 
 
 class TemplateSafetyTests(SimpleTestCase):
+    """Templates escape titles; an empty list says so."""
+
     def test_empty_list(self):
         with patch.dict(
             views.SAMPLE_EVENTS, {}, clear=True
@@ -111,41 +118,9 @@ class TemplateSafetyTests(SimpleTestCase):
         )
 
 
-class EventModelTests(SimpleTestCase):
-    def make_event(self, **changes):
-        fields = {
-            'title': 'Python meetup',
-            'starts_at': datetime(2026, 11, 19, 18, 30,
-                                  tzinfo=UTC),
-            'ends_at': datetime(2026, 11, 19, 20, 30,
-                                tzinfo=UTC),
-            'timezone': 'Europe/London',
-            'location': 'Virtual',
-            'capacity': 40,
-        }
-        fields.update(changes)
-        return Event(**fields)
-
-    def test_str_is_title(self):
-        event = self.make_event()
-        self.assertEqual(str(event), 'Python meetup')
-
-    def test_status_starts_draft_and_is_checked(self):
-        event = self.make_event()
-        self.assertEqual(event.status, Event.Status.DRAFT)
-        event.full_clean()
-        event.status = 'archived'
-        with self.assertRaises(ValidationError) as caught:
-            event.full_clean()
-        self.assertEqual(
-            caught.exception.message_dict,
-            {'status': [
-                "Value 'archived' is not a valid choice."
-            ]},
-        )
-
-
 class LayoutTests(SimpleTestCase):
+    """Every page shares the base layout and navigation."""
+
     pages = [
         ('/', 'events/home.html', 'Otahque'),
         ('/events/', 'events/list.html',
@@ -187,6 +162,8 @@ class LayoutTests(SimpleTestCase):
 
 
 class EventRowPartialTests(SimpleTestCase):
+    """The event row partial renders one event."""
+
     def test_row_renders_alone(self):
         event = {'id': 1, 'title': '<b>Not a tag</b>'}
         html = render_to_string(
@@ -198,7 +175,10 @@ class EventRowPartialTests(SimpleTestCase):
 
 
 class SampleLabelFilterTests(SimpleTestCase):
+    """The sample_label filter marks and escapes a title."""
+
     def render_label(self, title):
+        """Render the filter on title, as a template would."""
         template = Template(
             '{% load event_labels %}{{ title|sample_label }}'
         )
@@ -219,6 +199,8 @@ class SampleLabelFilterTests(SimpleTestCase):
 
 
 class StylesheetTests(SimpleTestCase):
+    """Pages link the stylesheet, and Django can find it."""
+
     def test_pages_link_stylesheet(self):
         for url, template, title in LayoutTests.pages:
             with self.subTest(url=url):
@@ -237,6 +219,8 @@ class StylesheetTests(SimpleTestCase):
 
 
 class DesignSystemTests(SimpleTestCase):
+    """The navigation uses the design system navbar."""
+
     def test_navigation_uses_navbar(self):
         response = self.client.get('/')
         self.assertContains(
@@ -249,4 +233,41 @@ class DesignSystemTests(SimpleTestCase):
         self.assertTrue(
             '.navbar {' in css,
             'site.css has no .navbar rule',
+        )
+
+
+class EventModelTests(SimpleTestCase):
+    """The Event model's rules, checked without a database."""
+
+    def make_event(self, **changes):
+        """Make a valid unsaved event with these changes."""
+        fields = {
+            'title': 'Python meetup',
+            'starts_at': datetime(2026, 11, 19, 18, 30,
+                                  tzinfo=UTC),
+            'ends_at': datetime(2026, 11, 19, 20, 30,
+                                tzinfo=UTC),
+            'timezone': 'Europe/London',
+            'location': 'Virtual',
+            'capacity': 40,
+        }
+        fields.update(changes)
+        return Event(**fields)
+
+    def test_str_is_title(self):
+        event = self.make_event()
+        self.assertEqual(str(event), 'Python meetup')
+
+    def test_status_starts_draft_and_is_checked(self):
+        event = self.make_event()
+        self.assertEqual(event.status, Event.Status.DRAFT)
+        event.full_clean()
+        event.status = 'archived'
+        with self.assertRaises(ValidationError) as caught:
+            event.full_clean()
+        self.assertEqual(
+            caught.exception.message_dict,
+            {'status': [
+                "Value 'archived' is not a valid choice."
+            ]},
         )

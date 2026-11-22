@@ -1,3 +1,4 @@
+"""Template filters and tags for event pages."""
 from django import template
 from django.utils.html import format_html
 

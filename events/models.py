@@ -1,3 +1,4 @@
+"""Models for Otahque's events."""
 from django.db import models
 
 
@@ -5,6 +6,8 @@ class Event(models.Model):
     """A proposed Otahque event, from the Chapter 15 ERD."""
 
     class Status(models.TextChoices):
+        """Where an event is: draft, published, or cancelled."""
+
         DRAFT = 'draft', 'Draft'
         PUBLISHED = 'published', 'Published'
         CANCELLED = 'cancelled', 'Cancelled'

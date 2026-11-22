@@ -1,3 +1,4 @@
+"""Addresses of the events app's pages."""
 from django.urls import path
 
 from . import views
