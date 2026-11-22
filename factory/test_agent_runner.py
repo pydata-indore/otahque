@@ -58,6 +58,14 @@ class ApplyEditsTests(unittest.TestCase):
         text = (self.root / 'notes.md').read_text()
         self.assertEqual(text, 'old\n')
 
+    def test_empty_search_fills_an_empty_file(self):
+        (self.root / 'app').mkdir()
+        (self.root / 'app/__init__.py').write_text('')
+        changed = self.apply(block('app/__init__.py', '', 'x\n'))
+        self.assertEqual(changed, ['app/__init__.py'])
+        text = (self.root / 'app/__init__.py').read_text()
+        self.assertEqual(text, 'x\n')
+
     def test_a_bad_block_writes_nothing(self):
         (self.root / 'a.py').write_text('x = 1\n')
         reply = (block('new.py', '', 'y = 2\n')
