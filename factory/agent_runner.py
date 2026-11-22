@@ -225,51 +225,71 @@ def apply_edits(text, allowed):
     """Apply every edit block, or none; return the paths changed.
 
     Each block is checked against an in-memory copy first, so a
-    bad block leaves every file as it was and the agent can
-    resend the whole reply.
+    bad block leaves every file as it was. Every bad block is
+    named, so one attempt can fix them all.
     """
     edits = list(EDIT.finditer(text))
     if not edits:
         raise ValueError('No FILE/SEARCH/REPLACE blocks found.')
-    pending = {}
+    pending, errors = {}, []
     for edit in edits:
-        path = edit['path']
-        if not allowed(path):
-            raise ValueError(f'{path} may not be changed now.')
-        target = ROOT / path
-        if path in pending:
-            old = pending[path]
-        elif target.is_file():
-            old = target.read_text(encoding='utf-8')
-        else:
-            old = None
-        search, replace = edit['search'], edit['replace']
-        if not search.strip():
-            # An empty file has nothing a SEARCH could match, so
-            # an empty SEARCH may fill it, as for a new file.
-            empty = old is not None and not old.strip()
-            if not empty and (old is not None
-                              or target.exists()):
-                raise ValueError(
-                    f'{path} exists: give a SEARCH block.')
-            pending[path] = replace
-        else:
-            # A model may assume a file that a command such as
-            # startapp would create; tell it instead of crashing.
-            if old is None:
-                raise ValueError(
-                    f'{path} does not exist yet: leave SEARCH '
-                    'empty to create it.')
-            if old.count(search) != 1:
-                raise ValueError(
-                    f'SEARCH text in {path} must match exactly'
-                    ' once; copy it from the current file.')
-            pending[path] = old.replace(search, replace)
+        try:
+            apply_one(edit, allowed, pending)
+        except ValueError as error:
+            errors.append(str(error))
+    if errors:
+        raise ValueError('\n'.join(errors))
     for path, new in pending.items():
         target = ROOT / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(new, encoding='utf-8')
     return list(pending)
+
+
+def apply_one(edit, allowed, pending):
+    """Check one edit block and add its result to pending."""
+    path = edit['path']
+    if not allowed(path):
+        raise ValueError(f'{path} may not be changed now.')
+    target = ROOT / path
+    if path in pending:
+        old = pending[path]
+    elif target.is_file():
+        old = target.read_text(encoding='utf-8')
+    else:
+        old = None
+    search, replace = edit['search'], edit['replace']
+    if not search.strip():
+        # An empty file has nothing a SEARCH could match, so an
+        # empty SEARCH may fill it, as for a new file.
+        empty = old is not None and not old.strip()
+        if not empty and (old is not None or target.exists()):
+            raise ValueError(
+                f'{path} exists: give a SEARCH block.')
+        pending[path] = replace
+        return
+    # A model may assume a file that a command would create;
+    # tell it instead of crashing.
+    if old is None:
+        raise ValueError(
+            f'{path} does not exist yet: leave SEARCH empty to '
+            'create it.')
+    if old.count(search) != 1:
+        raise ValueError(
+            f'SEARCH text in {path} must match exactly once; '
+            'copy it from the current file.')
+    pending[path] = old.replace(search, replace)
+
+
+def apps_to_create(issue):
+    """Return the listed apps the ticket names that are missing.
+
+    The runner creates these with startapp, as the book does,
+    so the model edits the same files a reader would.
+    """
+    return [app for app in APPS
+            if f'`{app}`' in issue['body']
+            and not (ROOT / app).exists()]
 
 
 def tracked(path):
@@ -875,6 +895,12 @@ def main():
                       'change:\n' + fence(report))
     baseline = test_count(report)
     log(f'- main passes: {baseline} tests\n')
+    for app in apps_to_create(issue):
+        code, out = manage('startapp', app)
+        if code:
+            raise Blocked(f'startapp {app} failed:\n'
+                          + fence(tail(out)))
+        log(f'- Created `{app}/` with `manage.py startapp`\n')
 
     log('### 2. Tests first')
     messages = [
@@ -884,10 +910,10 @@ def main():
             'tests the ticket asks for, in the tests.py of the '
             'app the ticket names (' + ', '.join(
                 f'{app}/tests.py' for app in APPS) + '). '
-            'For a new app, also create its __init__.py and '
-            'migrations/__init__.py so the tests are found. '
-            'Leave both completely empty, with no docstring, '
-            'as startapp does. Do not touch any other file. '
+            'A new app the ticket names was already created '
+            'with startapp; its files are shown above. Keep '
+            'its __init__.py files empty. Do not touch any '
+            'other file. '
             'The tests must fail now, before the code '
             'exists.')},
     ]
@@ -935,11 +961,10 @@ def main():
         + '\n\nStep 2 of 2: write the code and README change '
         'that make every test pass and meet each acceptance '
         'criterion. Do NOT change any test file now: if a '
-        'test is wrong, answer BLOCKED. No command such as '
-        'startapp has run: a file that such a command would '
-        'create does not exist unless it is shown below or in '
-        'the project files above, so create it with an empty '
-        'SEARCH. Current files:\n\n'
+        'test is wrong, answer BLOCKED. Only startapp has '
+        'run, for a new app: a file not shown below or in the '
+        'project files above does not exist, so create it '
+        'with an empty SEARCH. Current files:\n\n'
         + step_files())})
 
     def no_test_edits(path):
