@@ -30,7 +30,34 @@ change that breaks one.
   implicit string concatenation, as `config/settings.py` does.
 - Four-space indentation in Python; two spaces in templates.
 - Single-quoted strings in Python, as Django's generated files use.
-- Comments explain why, briefly. Do not add comments that repeat the code.
+
+## Docstrings and comments
+
+Code follows [PEP 257](https://peps.python.org/pep-0257/), as Django's
+own code does.
+
+- Every module in `events/` and `config/` starts with a one-line
+  docstring saying what it holds.
+- Every class and every public function or method has a docstring: one
+  summary line ending in a full stop, then, only when needed, a blank
+  line and a short paragraph (why, limits, or the chapter that changes
+  it). No Args or Returns sections.
+- A function or method summary is a command in the imperative mood:
+  "Return the zone to show times in.", not "The zone to show times
+  in." It never ends in a question mark: "Return whether ...". Module
+  and class summaries stay descriptions.
+- Exempt: inner `Meta` classes, `__str__`, the test hooks `setUp` and
+  `setUpTestData`, a decorator's inner wrapper (`functools.wraps` gives
+  it the view's docstring), and test methods whose names already say
+  what they check. Every test class has a docstring.
+- Files from `startproject` keep Django's docstrings, generated
+  migrations keep Django's header, and `startapp` stubs that no chapter
+  fills in stay as generated. Functions in data migrations have
+  docstrings.
+- Comments explain why, not what, in full sentences above the line
+  they explain.
+- Code added for a chapter carries its docstrings in the same pull
+  request, within the 65-character limit.
 
 ## Versions and dependencies
 
@@ -42,6 +69,45 @@ change that breaks one.
   `npm run build`.
 - No new dependency, and no upgrade, without the author's decision.
 - Never use an API from a later Django version than the pinned one.
+
+## Reviewing against the chapter plan
+
+Judge a change by its own ticket and the chapter it belongs to. The
+code is incomplete on purpose, so a finding that asks for work a later
+chapter teaches is answered by naming that chapter, and the code stays
+as it is. It becomes a finding on that chapter's pull request. If no
+later chapter covers it, it is a finding now.
+
+Always findings, whatever the chapter: a security defect, a failing
+test, and a line over 65 characters.
+
+A pull request that applies one book-wide change across several
+chapters, such as a docstring pass, is one capability.
+
+### Where later work lands
+
+| Topic | Chapter |
+|---|---|
+| Custom user model | 17 |
+| Migrations | 18 |
+| ORM queries | 19 |
+| Relationships between models | 20 |
+| Validation, constraints, `clean()`, `CheckConstraint` | 21 |
+| QuerySets and managers | 22 |
+| Django admin | 23 |
+| Forms, and validation in forms | 24 to 25 |
+| Sign-in and accounts | 27 |
+| Sessions, cookies, and time zones | 28 |
+| Permissions, ownership, and roles | 30 |
+| PostgreSQL | 32 |
+| Transactions and concurrency | 33 |
+| Class-based views | 35 |
+| Email | 43 |
+| Background tasks | 44 |
+| APIs and Django REST framework | 47 to 49 |
+
+The full contents are on the book site; this table lists the topics
+reviews ask for most.
 
 ## Security
 
