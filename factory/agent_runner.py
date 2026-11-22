@@ -245,7 +245,11 @@ def apply_edits(text, allowed):
             old = None
         search, replace = edit['search'], edit['replace']
         if not search.strip():
-            if old is not None or target.exists():
+            # An empty file has nothing a SEARCH could match, so
+            # an empty SEARCH may fill it, as for a new file.
+            empty = old is not None and not old.strip()
+            if not empty and (old is not None
+                              or target.exists()):
                 raise ValueError(
                     f'{path} exists: give a SEARCH block.')
             pending[path] = replace
