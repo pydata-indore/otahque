@@ -268,6 +268,23 @@ def apply_edits(text, allowed):
     return list(pending)
 
 
+def tracked(path):
+    """True if Git already tracks the file on this branch."""
+    code, out = run(['git', 'ls-files', '--', path])
+    return bool(out.strip())
+
+
+def tests_step_path(path):
+    """Allow tests, and a new app's package files.
+
+    A package file is allowed while it is new in this run, so
+    the agent can also correct one it made in an earlier
+    attempt; an existing app's files stay out of reach.
+    """
+    return bool(TESTS.fullmatch(path) or (
+        PACKAGE.fullmatch(path) and not tracked(path)))
+
+
 def may_edit(path):
     return any(rule.fullmatch(path) for rule in ALLOWED)
 
@@ -857,17 +874,13 @@ def main():
             'tests the ticket asks for, in the tests.py of the '
             'app the ticket names (' + ', '.join(
                 f'{app}/tests.py' for app in APPS) + '). '
-            'For a new app, also create its empty __init__.py '
-            'and migrations/__init__.py so the tests are '
-            'found. Do not touch any other file. The tests '
-            'must fail now, before the code exists.')},
+            'For a new app, also create its __init__.py and '
+            'migrations/__init__.py so the tests are found. '
+            'Leave both completely empty, with no docstring, '
+            'as startapp does. Do not touch any other file. '
+            'The tests must fail now, before the code '
+            'exists.')},
     ]
-
-    def tests_path(path):
-        """Allow tests, and a new app's package files."""
-        return bool(TESTS.fullmatch(path) or (
-            PACKAGE.fullmatch(path)
-            and not (ROOT / path).exists()))
 
     def tests_fail():
         paths = changed_paths()
@@ -902,7 +915,7 @@ def main():
         tests_fail.output = out
         return True, out
 
-    edit_loop(messages, tests_path, tests_fail, 'Tests')
+    edit_loop(messages, tests_step_path, tests_fail, 'Tests')
     red = tail(tests_fail.output, 30)
     log('- The new tests fail as required:\n' + fence(red))
 
