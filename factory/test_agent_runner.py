@@ -136,5 +136,54 @@ class TestsStepPathTests(unittest.TestCase):
         self.assertFalse(self.allowed('accounts/models.py'))
 
 
+
+class RunChecksTests(unittest.TestCase):
+    """run_checks() never runs Django on refused changes."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.calls = []
+        fake = {
+            'ROOT': self.root,
+            'manage': lambda *args: (
+                self.calls.append(args) or (0, 'OK')),
+        }
+        for name, value in fake.items():
+            self.addCleanup(setattr, agent_runner, name,
+                            getattr(agent_runner, name))
+            setattr(agent_runner, name, value)
+
+    def check(self, *paths):
+        self.addCleanup(setattr, agent_runner, 'changed_paths',
+                        agent_runner.changed_paths)
+        agent_runner.changed_paths = lambda: list(paths)
+        return agent_runner.run_checks()
+
+    def test_code_in_migrations_init_stops_before_django(self):
+        init = self.root / 'accounts/migrations/__init__.py'
+        init.parent.mkdir(parents=True)
+        init.write_text('import os\n')
+        passed, report = self.check(
+            'accounts/migrations/__init__.py')
+        self.assertFalse(passed)
+        self.assertIn('Must stay empty', report)
+        self.assertEqual(self.calls, [])
+
+    def test_a_refused_path_stops_before_django(self):
+        passed, report = self.check('factory/agent_runner.py')
+        self.assertFalse(passed)
+        self.assertIn('Not allowed', report)
+        self.assertEqual(self.calls, [])
+
+    def test_allowed_changes_run_django(self):
+        (self.root / 'README.md').write_text('Notes\n')
+        passed, report = self.check('README.md')
+        self.assertTrue(passed)
+        self.assertIn(('check',), self.calls)
+        self.assertIn(('test',), self.calls)
+
+
 if __name__ == '__main__':
     unittest.main()
