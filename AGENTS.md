@@ -5,11 +5,11 @@
 Otahque is a Django 6.1.2 application that helps volunteer-led
 communities run recurring events. This repository is the code of the
 Otahque Django book: every merged change is printed in the book, so a
-beginner must be able to follow it. The code covers Chapters 6 to 15
+beginner must be able to follow it. The code covers Chapters 6 to 16
 (project, settings, URLs, views, templates, static files, Tailwind CSS,
-daisyUI, and the proposed data model in `docs/design/erd.md`). There
-are no models or accounts yet; sample events are fictional and held in
-memory.
+daisyUI, the proposed data model in `docs/design/erd.md`, and the
+`Event` model). There is no migration, stored data, or account yet;
+sample events are fictional and held in memory.
 
 Full detail: [docs/STANDARDS.md](docs/STANDARDS.md),
 [docs/VERSION_BASELINE.md](docs/VERSION_BASELINE.md), and
@@ -96,6 +96,47 @@ If a template or `static/otahque/source.css` changed, also run
   not add or upgrade a dependency without the author's decision, and do
   not use an API newer than the pinned version. `site.css` is
   generated: edit `source.css` or a template, never `site.css`.
+
+### 6. Docstrings follow PEP 257
+
+- Applies to: Python files in `events/` and `config/`.
+- What: every module starts with a one-line docstring saying what it
+  holds. Every class and every public function or method has a
+  docstring: one summary line ending in a full stop, then, only when
+  needed, a blank line and a short paragraph (why, limits, or the
+  chapter that changes it). A function or method summary is a command,
+  "Return the zone to show times in.", and never ends in a question
+  mark. No Args or Returns sections. Comments explain why, not what, in
+  full sentences above the line they explain.
+- Exempt: inner `Meta` classes, `__str__`, `setUp`, `setUpTestData`, a
+  decorator's inner wrapper, and test methods whose names already say
+  what they check; every test class still has a docstring. Files from
+  `startproject` keep Django's docstrings, generated migrations keep
+  Django's header, and `startapp` stubs that no chapter fills in stay
+  as generated.
+- Why: the book prints these files, and Django's own code follows PEP
+  257. The docstring is where a beginner reads what the code is for,
+  so code added for a chapter carries its docstrings in that same pull
+  request, within rule 1's 65 characters.
+
+### 7. Review against the chapter plan
+
+- Applies to: every review finding, from Qodo, an agent, or a person,
+  and to the answer it gets.
+- What: judge a change by its own ticket and the chapter it belongs
+  to. A finding that asks for something a later chapter teaches is not
+  a defect of this change: the answer names that chapter (see "Where
+  later work lands" in `docs/STANDARDS.md`) and the code stays as it
+  is. If no later chapter covers it, it is a finding now. A security
+  defect (rule 3), a failing test, and a broken rule 1 are always
+  findings, whatever the chapter. A pull request that applies one
+  book-wide change across several chapters, such as a docstring pass,
+  is one capability.
+- Why: the code grows one chapter at a time and is incomplete on
+  purpose. Chapter 16's `Event` accepts an `ends_at` before `starts_at`
+  because validation and constraints are taught in Chapter 21; adding
+  them earlier would print code the reader has not been taught
+  (rule 4).
 
 ## Commits
 
