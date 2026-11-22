@@ -454,6 +454,12 @@ def run_checks():
             'Settings changes not allowed (only an '
             'INSTALLED_APPS entry and AUTH_USER_MODEL):\n'
             + '\n'.join(settings))
+    # Django imports the project when it runs, so code in a
+    # refused place must never get that far.
+    if banned or full or settings:
+        report.append('Django checks and tests not run until '
+                      'the problems above are fixed.')
+        return False, '\n\n'.join(report)
     code, out = manage('check')
     passed = passed and code == 0
     report.append('$ manage.py check\n' + tail(out, 20))

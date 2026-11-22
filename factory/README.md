@@ -24,7 +24,9 @@ the issue number.
 5. After every edit the script itself runs the checks:
    allowed paths, the settings guard, at most 65 characters per
    line, `manage.py check`, and `manage.py test` (every app).
-   `makemigrations --check --dry-run` is recorded only.
+   `makemigrations --check --dry-run` is recorded only. If a
+   path is refused, a `migrations/__init__.py` is not empty, or
+   the settings guard fails, Django is not run at all.
 6. A separate model call checks each acceptance criterion
    against the diff and the check output. Unmet criteria go
    back to the code step once.
