@@ -77,6 +77,17 @@ class ApplyEditsTests(unittest.TestCase):
         text = (self.root / 'a.py').read_text()
         self.assertEqual(text, 'x = 1\n')
 
+    def test_every_bad_block_is_named(self):
+        reply = (block('one.py', 'a\n', 'b\n')
+                 + block('ok.py', '', 'x\n')
+                 + block('two.py', 'c\n', 'd\n'))
+        with self.assertRaises(ValueError) as caught:
+            self.apply(reply)
+        message = str(caught.exception)
+        self.assertIn('one.py does not exist', message)
+        self.assertIn('two.py does not exist', message)
+        self.assertFalse((self.root / 'ok.py').exists())
+
     def test_later_blocks_see_earlier_ones(self):
         reply = (block('new.py', '', 'x = 1\n')
                  + block('new.py', 'x = 1\n', 'x = 2\n'))
@@ -135,6 +146,31 @@ class TestsStepPathTests(unittest.TestCase):
     def test_other_app_files_are_refused(self):
         self.assertFalse(self.allowed('accounts/models.py'))
 
+
+
+class AppsToCreateTests(unittest.TestCase):
+    """The runner creates a listed app the ticket names."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        agent_runner.ROOT = Path(self.tmp.name)
+        (agent_runner.ROOT / 'events').mkdir()
+
+    def apps(self, body):
+        return agent_runner.apps_to_create({'body': body})
+
+    def test_a_named_missing_app_is_created(self):
+        self.assertEqual(self.apps('A new `accounts` app'),
+                         ['accounts'])
+
+    def test_an_existing_app_is_not_created_again(self):
+        self.assertEqual(self.apps('Change `events`'), [])
+
+    def test_an_app_not_in_the_list_is_ignored(self):
+        self.assertEqual(self.apps('A new `payments` app'), [])
 
 
 class RunChecksTests(unittest.TestCase):
