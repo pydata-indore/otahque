@@ -69,6 +69,9 @@ ALLOWED = (
 TESTS = re.compile(APP + r'/tests[\w/]*\.py$')
 # A new app's empty package files, allowed with its tests.
 PACKAGE = re.compile(APP + r'/(migrations/)?__init__\.py$')
+# Django imports this file when it loads migrations, so it
+# must stay empty at every stage, not only the tests step.
+MIGRATIONS_INIT = re.compile(APP + r'/migrations/__init__\.py$')
 # The only settings lines the agent may add or remove.
 APP_ENTRY = re.compile(r"\s+'\w+\.apps\.\w+Config',")
 USER_MODEL = re.compile(r"AUTH_USER_MODEL = '\w+\.\w+'")
@@ -401,6 +404,12 @@ def run_checks():
         passed = False
         report.append('Lines over 65 characters:\n'
                       + '\n'.join(lines))
+    full = [p for p in paths if MIGRATIONS_INIT.fullmatch(p)
+            and (ROOT / p).is_file()
+            and (ROOT / p).read_text(encoding='utf-8').strip()]
+    if full:
+        passed = False
+        report.append('Must stay empty: ' + ', '.join(full))
     settings = settings_problems() if SETTINGS in paths else []
     if settings:
         passed = False
