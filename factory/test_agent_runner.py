@@ -85,5 +85,48 @@ class ApplyEditsTests(unittest.TestCase):
         self.assertFalse((self.root / 'ok.py').exists())
 
 
+
+class TestsStepPathTests(unittest.TestCase):
+    """The tests step may touch tests and new package files."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.old_root = agent_runner.ROOT
+        agent_runner.ROOT = self.root
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        self.old_root)
+        (self.root / 'events').mkdir()
+        (self.root / 'events/__init__.py').write_text('')
+        for args in (['init', '-q'],
+                     ['add', 'events/__init__.py'],
+                     ['-c', 'user.name=t', '-c',
+                      'user.email=t@example.com',
+                      'commit', '-q', '-m', 'start']):
+            agent_runner.run(['git', *args])
+
+    def allowed(self, path):
+        return agent_runner.tests_step_path(path)
+
+    def test_tests_are_allowed(self):
+        self.assertTrue(self.allowed('accounts/tests.py'))
+
+    def test_a_new_package_file_is_allowed(self):
+        self.assertTrue(self.allowed('accounts/__init__.py'))
+
+    def test_a_package_file_made_this_run_can_be_fixed(self):
+        new = self.root / 'accounts/__init__.py'
+        new.parent.mkdir()
+        new.write_text('"""Accounts."""\n')
+        self.assertTrue(self.allowed('accounts/__init__.py'))
+
+    def test_an_existing_app_package_is_refused(self):
+        self.assertFalse(self.allowed('events/__init__.py'))
+
+    def test_other_app_files_are_refused(self):
+        self.assertFalse(self.allowed('accounts/models.py'))
+
+
 if __name__ == '__main__':
     unittest.main()
