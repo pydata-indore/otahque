@@ -15,7 +15,8 @@ change that breaks one.
    failure case (404, empty state, escaping).
 3. **Runnable from the previous checkpoint.** Every merge to `main`
    passes `uv run python manage.py check` and
-   `uv run python manage.py test events` from a fresh `uv sync --locked`.
+   `uv run python manage.py test` (every app) from a fresh
+   `uv sync --locked`.
    Inside a pull request, the first commit may hold failing tests.
 4. **Chapter order.** Use only what the book has taught by that chapter.
    For example: no models before Chapter 15, no custom user before
@@ -36,8 +37,8 @@ change that breaks one.
 Code follows [PEP 257](https://peps.python.org/pep-0257/), as Django's
 own code does.
 
-- Every module in `events/` and `config/` starts with a one-line
-  docstring saying what it holds.
+- Every module in `events/`, `accounts/`, and `config/` starts with a
+  one-line docstring saying what it holds.
 - Every class and every public function or method has a docstring: one
   summary line ending in a full stop, then, only when needed, a blank
   line and a short paragraph (why, limits, or the chapter that changes

@@ -51,14 +51,27 @@ SKIP_LABEL = re.compile(
 PROJECT_FILE = re.compile(
     r'\w[\w/.-]*\.(py|html|md|js|css|json|toml)')
 
+# The apps the agent may work in. Adding one is a reviewed
+# change to this list, never something the agent does.
+APPS = ('events', 'accounts')
+APP = '(?:' + '|'.join(APPS) + ')'
+SETTINGS = 'config/settings.py'
+
 # The agent may change only these paths.
 ALLOWED = (
-    re.compile(r'events/(?!migrations/)[\w/]+\.(py|html)$'),
+    re.compile(APP + r'/(?!migrations/)[\w/]+\.(py|html)$'),
+    re.compile(APP + r'/migrations/__init__\.py$'),
+    re.compile(re.escape(SETTINGS) + '$'),
     re.compile(r'templates/[\w/]+\.html$'),
     re.compile(r'README\.md$'),
-    re.compile(r'docs/[\w/]+\.md$'),
+    re.compile(r'docs/[\w/-]+\.md$'),
 )
-TESTS = re.compile(r'events/tests[\w/]*\.py$')
+TESTS = re.compile(APP + r'/tests[\w/]*\.py$')
+# A new app's empty package files, allowed with its tests.
+PACKAGE = re.compile(APP + r'/(migrations/)?__init__\.py$')
+# The only settings lines the agent may add or remove.
+APP_ENTRY = re.compile(r"\s+'\w+\.apps\.\w+Config',")
+USER_MODEL = re.compile(r"AUTH_USER_MODEL = '\w+\.\w+'")
 CONTEXT = (
     'AGENTS.md', 'docs/STANDARDS.md', 'docs/BOOK_SYNC.md',
     'README.md', 'docs/design/erd.md',
@@ -251,8 +264,14 @@ def file_text(paths):
     return '\n\n'.join(parts)
 
 
+def step_files():
+    """Return the files the agent sees while it writes code."""
+    return file_text(code_files() + [SETTINGS, 'README.md'])
+
+
 def code_files():
-    code, out = run(['git', 'ls-files', 'events', 'templates'])
+    code, out = run(['git', 'ls-files', '--cached', '--others',
+                     '--exclude-standard', *APPS, 'templates'])
     return [
         p for p in out.split()
         if p.endswith(('.py', '.html'))
@@ -263,7 +282,10 @@ def code_files():
 # ---------- checks run by this script, not the model ----------
 
 def changed_paths():
-    code, out = run(['git', 'status', '--porcelain'])
+    # List each new file, not just a new folder such as
+    # accounts/, so every path gets the path and line checks.
+    code, out = run(['git', 'status', '--porcelain',
+                     '--untracked-files=all'])
     paths = []
     for line in out.splitlines():
         path = line[3:].strip()
@@ -289,6 +311,73 @@ def long_lines(paths):
     return problems
 
 
+def list_lines(text, name):
+    """Return the line numbers inside the list `name = [`."""
+    inside, start = set(), False
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.startswith(name + ' = ['):
+            start = True
+        elif start and line.startswith(']'):
+            break
+        elif start:
+            inside.add(number)
+    return inside
+
+
+def comment_for_user_model(lines, number):
+    """True if the comments at `number` lead to the setting."""
+    for line in lines[number - 1:]:
+        if not line.startswith('#'):
+            return bool(USER_MODEL.fullmatch(line))
+    return False
+
+
+def settings_problems():
+    """Return settings lines the agent may not add or remove.
+
+    Allowed: an app entry inside INSTALLED_APPS, the
+    AUTH_USER_MODEL line, comments directly above it, and blank
+    lines. Secrets, DEBUG and hosts stay out of reach.
+    """
+    code, out = run(['git', 'diff', '-U0', 'HEAD', '--',
+                     SETTINGS])
+    if not out.strip():
+        return []
+    code, old = run(['git', 'show', f'HEAD:{SETTINGS}'])
+    new = (ROOT / SETTINGS).read_text(encoding='utf-8')
+    old_apps = list_lines(old, 'INSTALLED_APPS')
+    new_apps = list_lines(new, 'INSTALLED_APPS')
+    new_lines = new.splitlines()
+    problems = []
+    old_n = new_n = None
+    for line in out.splitlines():
+        hunk = re.match(r'@@ -(\d+)(?:,\d+)? \+(\d+)', line)
+        if hunk:
+            old_n, new_n = int(hunk[1]), int(hunk[2])
+            continue
+        if old_n is None or line[:1] not in ('+', '-'):
+            continue
+        text = line[1:]
+        if line[0] == '-':
+            ok = not text.strip() or (
+                old_n in old_apps and APP_ENTRY.fullmatch(text))
+            where = f'removed line {old_n}'
+            old_n += 1
+        else:
+            ok = (not text.strip()
+                  or USER_MODEL.fullmatch(text)
+                  or (new_n in new_apps
+                      and APP_ENTRY.fullmatch(text))
+                  or (text.startswith('#')
+                      and comment_for_user_model(new_lines,
+                                                 new_n)))
+            where = f'line {new_n}'
+            new_n += 1
+        if not ok:
+            problems.append(f'{SETTINGS} {where}: {text}')
+    return problems
+
+
 def manage(*args):
     return run(['uv', 'run', 'python', 'manage.py', *args])
 
@@ -307,12 +396,19 @@ def run_checks():
         passed = False
         report.append('Lines over 65 characters:\n'
                       + '\n'.join(lines))
+    settings = settings_problems() if SETTINGS in paths else []
+    if settings:
+        passed = False
+        report.append(
+            'Settings changes not allowed (only an '
+            'INSTALLED_APPS entry and AUTH_USER_MODEL):\n'
+            + '\n'.join(settings))
     code, out = manage('check')
     passed = passed and code == 0
     report.append('$ manage.py check\n' + tail(out, 20))
-    code, out = manage('test', 'events')
+    code, out = manage('test')
     passed = passed and code == 0
-    report.append('$ manage.py test events\n' + tail(out))
+    report.append('$ manage.py test\n' + tail(out))
     code, out = manage(
         'makemigrations', '--check', '--dry-run')
     report.append(
@@ -331,11 +427,24 @@ def fails_for_new_code(out):
     if re.search(r'cannot import name|has no attribute'
                  r'|No module named', out):
         return True
-    code, added = run(['git', 'diff', '-U0', '--', 'events'])
-    names = re.findall(r'^\+\s*def (test_\w+)', added, re.M)
     failed = re.findall(r'^(?:FAIL|ERROR): (test_\w+)',
                         out, re.M)
-    return bool(set(names) & set(failed))
+    return bool(added_test_names() & set(failed))
+
+
+def added_test_names():
+    """Return test methods added in this run, new files too."""
+    code, added = run(['git', 'diff', '-U0', '--', *APPS])
+    names = set(re.findall(r'^\+\s*def (test_\w+)', added,
+                           re.M))
+    code, new = run(['git', 'ls-files', '--others',
+                     '--exclude-standard', '--', *APPS])
+    for path in new.split():
+        if TESTS.fullmatch(path):
+            text = (ROOT / path).read_text(encoding='utf-8')
+            names |= set(re.findall(r'^\s*def (test_\w+)',
+                                    text, re.M))
+    return names
 
 
 def test_count(report):
@@ -715,17 +824,35 @@ def main():
         {'role': 'system', 'content': RULES},
         {'role': 'user', 'content': project_brief(issue) + (
             '\n\nStep 1 of 2: write ONLY the new or changed '
-            'tests the ticket asks for, in events/tests.py. '
-            'Do not touch any other file. The tests must fail '
-            'now, before the code exists.')},
+            'tests the ticket asks for, in the tests.py of the '
+            'app the ticket names (' + ', '.join(
+                f'{app}/tests.py' for app in APPS) + '). '
+            'For a new app, also create its empty __init__.py '
+            'and migrations/__init__.py so the tests are '
+            'found. Do not touch any other file. The tests '
+            'must fail now, before the code exists.')},
     ]
 
+    def tests_path(path):
+        """Allow tests, and a new app's package files."""
+        return bool(TESTS.fullmatch(path) or (
+            PACKAGE.fullmatch(path)
+            and not (ROOT / path).exists()))
+
     def tests_fail():
-        lines = long_lines(changed_paths())
+        paths = changed_paths()
+        lines = long_lines(paths)
         if lines:
             return False, ('Lines over 65 characters:\n'
                            + '\n'.join(lines))
-        code, out = manage('test', 'events')
+        full = [p for p in paths if PACKAGE.fullmatch(p)
+                and (ROOT / p).read_text(encoding='utf-8')
+                .strip()]
+        if full:
+            return False, (
+                'Package files must be empty in this step: '
+                + ', '.join(full))
+        code, out = manage('test')
         if code == 0:
             return False, (
                 'The tests PASS without the new code, so they '
@@ -745,7 +872,7 @@ def main():
         tests_fail.output = out
         return True, out
 
-    edit_loop(messages, TESTS.fullmatch, tests_fail, 'Tests')
+    edit_loop(messages, tests_path, tests_fail, 'Tests')
     red = tail(tests_fail.output, 30)
     log('- The new tests fail as required:\n' + fence(red))
 
@@ -756,7 +883,7 @@ def main():
         'that make every test pass and meet each acceptance '
         'criterion. Do NOT change any test file now: if a '
         'test is wrong, answer BLOCKED. Current files:\n\n'
-        + file_text(code_files() + ['README.md']))})
+        + step_files())})
 
     def no_test_edits(path):
         return may_edit(path) and not TESTS.fullmatch(path)
@@ -789,7 +916,7 @@ def main():
             + json.dumps(unmet, indent=1)
             + '\n\nFix them without changing test files. '
             'Current files:\n\n'
-            + file_text(code_files() + ['README.md']))})
+            + step_files())})
         report = edit_loop(messages, no_test_edits,
                            run_checks, 'Code (criteria)')
 
@@ -868,7 +995,7 @@ def review(pr, branch, issue, messages, since):
             + json.dumps(confirmed, indent=1)
             + '\n\nFull review:\n' + findings
             + '\n\nCurrent files:\n\n'
-            + file_text(code_files() + ['README.md']))})
+            + step_files())})
         edit_loop(messages, may_edit, run_checks,
                   f'Review fix {round_}')
         titles = '; '.join(f['title'] for f in confirmed)
