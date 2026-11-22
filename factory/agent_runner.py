@@ -332,6 +332,16 @@ def comment_for_user_model(lines, number):
     return False
 
 
+def allowed_line(text, number, apps, lines):
+    """True if the agent may change this settings line."""
+    return bool(
+        not text.strip()
+        or USER_MODEL.fullmatch(text)
+        or (number in apps and APP_ENTRY.fullmatch(text))
+        or (text.startswith('#')
+            and comment_for_user_model(lines, number)))
+
+
 def settings_problems():
     """Return settings lines the agent may not add or remove.
 
@@ -347,7 +357,7 @@ def settings_problems():
     new = (ROOT / SETTINGS).read_text(encoding='utf-8')
     old_apps = list_lines(old, 'INSTALLED_APPS')
     new_apps = list_lines(new, 'INSTALLED_APPS')
-    new_lines = new.splitlines()
+    old_lines, new_lines = old.splitlines(), new.splitlines()
     problems = []
     old_n = new_n = None
     for line in out.splitlines():
@@ -358,19 +368,14 @@ def settings_problems():
         if old_n is None or line[:1] not in ('+', '-'):
             continue
         text = line[1:]
+        # The same rule both ways, so the agent can also
+        # replace or remove the setting it added.
         if line[0] == '-':
-            ok = not text.strip() or (
-                old_n in old_apps and APP_ENTRY.fullmatch(text))
+            ok = allowed_line(text, old_n, old_apps, old_lines)
             where = f'removed line {old_n}'
             old_n += 1
         else:
-            ok = (not text.strip()
-                  or USER_MODEL.fullmatch(text)
-                  or (new_n in new_apps
-                      and APP_ENTRY.fullmatch(text))
-                  or (text.startswith('#')
-                      and comment_for_user_model(new_lines,
-                                                 new_n)))
+            ok = allowed_line(text, new_n, new_apps, new_lines)
             where = f'line {new_n}'
             new_n += 1
         if not ok:
