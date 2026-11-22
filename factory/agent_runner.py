@@ -240,6 +240,12 @@ def apply_edits(text, allowed):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(replace, encoding='utf-8')
         else:
+            # A model may assume a file that a command such as
+            # startapp would create; tell it instead of crashing.
+            if not target.is_file():
+                raise ValueError(
+                    f'{path} does not exist yet: leave SEARCH '
+                    'empty to create it.')
             old = target.read_text(encoding='utf-8')
             if old.count(search) != 1:
                 raise ValueError(
@@ -896,7 +902,10 @@ def main():
         + '\n\nStep 2 of 2: write the code and README change '
         'that make every test pass and meet each acceptance '
         'criterion. Do NOT change any test file now: if a '
-        'test is wrong, answer BLOCKED. Current files:\n\n'
+        'test is wrong, answer BLOCKED. No command such as '
+        'startapp has run: a file not listed below does not '
+        'exist yet, so create it with an empty SEARCH. '
+        'Current files:\n\n'
         + step_files())})
 
     def no_test_edits(path):
