@@ -39,8 +39,11 @@ run:
 
 ```
 uv run python manage.py check
-uv run python manage.py test events
+uv run python manage.py test
 ```
+
+`test` with no app name runs the tests of every app (`events`,
+and `accounts` from Chapter 17).
 
 If a template or `static/otahque/source.css` changed, also run
 `npm run build` and commit the rebuilt `static/otahque/site.css`.
@@ -99,7 +102,7 @@ If a template or `static/otahque/source.css` changed, also run
 
 ### 6. Docstrings follow PEP 257
 
-- Applies to: Python files in `events/` and `config/`.
+- Applies to: Python files in `events/`, `accounts/`, and `config/`.
 - What: every module starts with a one-line docstring saying what it
   holds. Every class and every public function or method has a
   docstring: one summary line ending in a full stop, then, only when

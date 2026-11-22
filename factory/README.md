@@ -10,13 +10,20 @@ the issue number.
 
 1. Labels the issue `agent-working` and links the run.
 2. Runs the checks on `main` first; a failing `main` stops it.
-3. Tests first: the model may change only `events/tests*.py`.
+3. Tests first: the model may change only the test modules of
+   the apps in `APPS` (`events/`, `accounts/`), plus the empty
+   `__init__.py` files of a new app so its tests are found.
    The script runs the tests and accepts them only if they fail.
-4. Code: the model may change `events/` (not migrations),
+4. Code: the model may change those apps (not migrations, except
+   an empty `migrations/__init__.py`), `config/settings.py`,
    `templates/`, `README.md`, and `docs/`, but not the tests.
+   In `config/settings.py` it may only add or remove an
+   `INSTALLED_APPS` entry and set `AUTH_USER_MODEL` (with
+   comments above it); any other settings line fails the checks,
+   so secrets, `DEBUG`, and hosts stay out of reach.
 5. After every edit the script itself runs the checks:
-   allowed paths, at most 65 characters per line,
-   `manage.py check`, and `manage.py test events`.
+   allowed paths, the settings guard, at most 65 characters per
+   line, `manage.py check`, and `manage.py test` (every app).
    `makemigrations --check --dry-run` is recorded only.
 6. A separate model call checks each acceptance criterion
    against the diff and the check output. Unmet criteria go
