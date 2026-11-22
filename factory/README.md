@@ -81,6 +81,18 @@ comment the run cannot read is reported separately. The run
 never force-pushes, never merges, and never
 reuses an existing branch.
 
+## Testing the runner
+
+The runner's own tests are not part of the book, so
+`manage.py test` does not find them. From the repository root:
+
+```
+python -m unittest factory/test_agent_runner.py
+```
+
+They cover how edits are applied: every block or none, and a
+clear error for a missing file.
+
 ## Settings
 
 Under Settings, Secrets and variables, Actions:
