@@ -37,9 +37,9 @@ GIT_STATE = None
 # An unset Actions variable is "", so use `or` for defaults.
 REFERENCE_REPO = (os.environ.get('REFERENCE_REPO')
                   or 'SamChawla/otahque-web-book')
-# Pinned to a reviewed commit (Chapter 24 checkpoint), not main.
+# Pinned to a reviewed commit (end of Chapter 33), not main.
 REFERENCE_REF = (os.environ.get('REFERENCE_REF')
-                 or '47deb3b772a7f87db722c361f6c5c6b5c96cb110')
+                 or '1d0252b991e272d799279d3c15b56e4768fafee0')
 REFERENCE_SECONDS = 120
 REFERENCE_TOTAL_LIMIT = 50000
 LISTING = re.compile(
