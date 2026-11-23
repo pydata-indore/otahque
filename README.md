@@ -22,7 +22,8 @@ going through a pull request and a Qodo review before it reaches the book.
 | Static files, Tailwind, daisyUI | 13 to 14 | Written during the hackathon; chapters drafted |
 | Relational data model (ERD) | 15 | Written during the hackathon; chapter drafted |
 | Models, users, migrations, ORM, admin | 16 | Written during the hackathon; chapter drafted |
-| Models, users, migrations, ORM, admin | 17 to 23 | Planned |
+| Models, users, migrations, ORM, admin | 17 | Written during the hackathon; chapter drafted |
+| Models, users, migrations, ORM, admin | 18 to 23 | Planned |
 | Forms, accounts, permissions, registration | 24 to 34 | Planned |
 
 The full 75-chapter contents are on the book site. There are no event

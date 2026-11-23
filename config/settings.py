@@ -51,8 +51,13 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'accounts.apps.AccountsConfig',
     'events.apps.EventsConfig',
 ]
+
+# Otahque's own user model, set before the first migration.
+# See docs/adr/ADR-002-user-model.md.
+AUTH_USER_MODEL = 'accounts.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
