@@ -1,5 +1,7 @@
 """Models for Otahque's events."""
+from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Event(models.Model):
@@ -29,3 +31,30 @@ class Event(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class OrganizerAssignment(models.Model):
+    """Which member organizes which event, from the ERD."""
+
+    event = models.ForeignKey(
+        Event,
+        on_delete=models.PROTECT,
+        related_name='organizer_assignments',
+    )
+    member = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='organizer_assignments',
+    )
+    assigned_at = models.DateTimeField(
+        default=timezone.now
+    )
+    revoked_at = models.DateTimeField(
+        null=True, blank=True
+    )
+
+    class Meta:
+        ordering = ['assigned_at']
+
+    def __str__(self):
+        return f'{self.member} organizes {self.event}'

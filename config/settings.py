@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'accounts.apps.AccountsConfig',
     'events.apps.EventsConfig',
+    'registrations.apps.RegistrationsConfig',
 ]
 
 # Otahque's own user model, set before the first migration.
