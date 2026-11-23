@@ -30,8 +30,9 @@ going through a pull request and a Qodo review before it reaches the book.
 
 The full 75-chapter contents are on the book site. The `Event` model and
 the custom user (`accounts.User`) have their first migrations; there is
-no stored data in the repository and no deployed server yet. Sample
-events are fictional and held in memory.
+no stored data in the repository and no deployed server yet. The event
+pages show the published events saved in your local `db.sqlite3`, so a
+fresh database lists none until you save one.
 
 `main` holds only this README and the working docs. All code arrives
 through reviewed pull requests, one branch each.
