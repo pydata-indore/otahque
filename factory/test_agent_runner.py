@@ -234,6 +234,15 @@ class TicketDocsTests(unittest.TestCase):
         self.assertIn(line + '(cut here', shown)
         self.assertIn('# ERD', text)
 
+    def test_one_very_long_line_is_not_shown_in_part(self):
+        limit = agent_runner.DOC_LIMIT
+        big = agent_runner.ROOT / 'docs/design/big.md'
+        big.write_text('y' * (limit + 10) + '\n')
+        text = agent_runner.doc_text(['docs/design/big.md'])
+        shown = text.split('---')[-1].split('(')[0]
+        self.assertNotIn('y', shown)
+        self.assertIn('only the first 0 are shown', text)
+
     def test_an_edit_in_the_shown_part_still_applies(self):
         limit = agent_runner.DOC_LIMIT
         big = agent_runner.ROOT / 'docs/design/big.md'
