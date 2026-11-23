@@ -61,7 +61,7 @@ SETTINGS = 'config/settings.py'
 # Docs the agent may change: no dots in the path, so nothing
 # like docs/../.env.
 DOCS = re.compile(r'docs/[\w/-]+\.md$')
-# A named doc larger than this is listed but not shown.
+# A named doc longer than this is shown only up to it.
 DOC_LIMIT = 20000
 
 # The agent may change only these paths.
@@ -345,13 +345,21 @@ def ticket_docs(issue):
 
 
 def doc_text(paths):
-    """Return the docs as file text, leaving out huge ones."""
+    """Return the docs as file text, cutting very long ones.
+
+    A long doc keeps its first whole lines up to the limit, so
+    the agent can still edit the part it is shown.
+    """
     parts = []
     for path in paths:
         text = (ROOT / path).read_text(encoding='utf-8')
         if len(text) > DOC_LIMIT:
-            text = (f'(not shown: {len(text)} characters, over '
-                    f'the {DOC_LIMIT} limit)')
+            cut = text[:DOC_LIMIT]
+            if '\n' in cut:
+                cut = cut[:cut.rindex('\n') + 1]
+            text = (cut + f'(cut here: the file has {len(text)} '
+                    f'characters; only the first {len(cut)} are '
+                    'shown, so edit only that part)')
         parts.append(f'--- {path} ---\n{text}')
     return '\n\n'.join(parts)
 
