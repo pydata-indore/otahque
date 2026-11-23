@@ -20,7 +20,9 @@ the issue number.
    found. The script runs the tests and accepts them only if
    they fail for the missing code. When the ticket has the
    runner make migrations, a test database that cannot be built
-   for lack of them also counts.
+   for lack of them also counts. If the ticket names its tests
+   (`test_...` in backticks), every one must be written before
+   the step is accepted, since the code step cannot add tests.
 4. Code: the model may change the local apps (not migrations,
    except an empty `migrations/__init__.py`), the template
    folders, the settings and URL modules, `README.md`, and
