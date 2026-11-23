@@ -463,11 +463,54 @@ def apply_one(edit, allowed, pending):
         raise ValueError(
             f'{path} does not exist yet: leave SEARCH empty to '
             'create it.')
-    if old.count(search) != 1:
+    count = old.count(search)
+    if count != 1:
         raise ValueError(
-            f'SEARCH text in {path} must match exactly once; '
-            'copy it from the current file.')
+            search_problem(path, old, search, count))
     pending[path] = old.replace(search, replace)
+
+
+def search_problem(path, old, search, count):
+    """Say why a SEARCH block does not match exactly once.
+
+    Naming the first line that is not in the file shows the
+    model what it copied wrongly, for example from the book's
+    reference instead of the current file (Chapter 18, run 3).
+    """
+    if count > 1:
+        return (f'SEARCH text in {path} matches {count} times; '
+                'add unchanged lines before or after it so it '
+                'matches once.')
+    lines = set(old.splitlines())
+    for line in search.splitlines():
+        if line.strip() and line not in lines:
+            return (f'SEARCH text in {path} does not match the '
+                    'current file. This SEARCH line is not in '
+                    f'it: {line!r}. Copy SEARCH from the '
+                    f'current {path} below, not from the '
+                    'reference.')
+    return (f'SEARCH text in {path} does not match the current '
+            'file: every line is in it, but not in this order, '
+            'or blank lines differ. Copy SEARCH from the '
+            f'current {path} below, not from the reference.')
+
+
+def retry_files(reply, allowed):
+    """Return the files to show the model after a failed attempt.
+
+    The files changed so far, and the existing files the reply
+    tried to edit, so a rejected reply is followed by the real
+    text. Only paths the step allows are shown, so a block
+    naming .env never shows it.
+    """
+    paths = list(changed_paths())
+    for edit in EDIT.finditer(reply or ''):
+        path = edit['path']
+        if (path not in paths and allowed(path)
+                and posixpath.normpath(path) == path
+                and (ROOT / path).is_file()):
+            paths.append(path)
+    return paths
 
 
 def tracked(path):
@@ -1104,8 +1147,9 @@ def edit_loop(messages, allowed, verify, stage):
                     'characters; do not change other lines.')
             log('  - Checks failed:\n' + fence(tail(report, 25)))
         messages.append({'role': 'user', 'content': (
-            feedback + '\n\nCurrent files you changed:\n\n'
-            + file_text(changed_paths())
+            feedback + '\n\nCurrent files you changed or tried '
+            'to change (copy SEARCH text only from these):\n\n'
+            + file_text(retry_files(reply, allowed))
             + '\n\nSend corrected edit blocks.')})
     raise Blocked(
         f'{stage}: still failing after {MAX_ATTEMPTS} attempts.')
