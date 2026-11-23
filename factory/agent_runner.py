@@ -355,8 +355,10 @@ def doc_text(paths):
         text = (ROOT / path).read_text(encoding='utf-8')
         if len(text) > DOC_LIMIT:
             cut = text[:DOC_LIMIT]
-            if '\n' in cut:
-                cut = cut[:cut.rindex('\n') + 1]
+            # Never show part of a line: SEARCH must copy whole
+            # lines from the real file.
+            end = cut.rfind('\n') + 1
+            cut = cut[:end]
             text = (cut + f'(cut here: the file has {len(text)} '
                     f'characters; only the first {len(cut)} are '
                     'shown, so edit only that part)')
