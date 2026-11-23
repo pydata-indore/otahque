@@ -25,4 +25,5 @@ class User(AbstractBaseUser, PermissionsMixin):
     REQUIRED_FIELDS = ['display_name']
 
     def __str__(self):
+        """Return the member's email address."""
         return self.email
