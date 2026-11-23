@@ -29,6 +29,8 @@ change that breaks one.
 - **At most 65 characters per line**, indentation included, in Python,
   templates, settings, and shown commands. Split with parentheses or
   implicit string concatenation, as `config/settings.py` does.
+  Generated migrations are exempt: they keep the layout
+  `makemigrations` gives them, as the book prints them (Chapter 18).
 - Four-space indentation in Python; two spaces in templates.
 - Single-quoted strings in Python, as Django's generated files use.
 

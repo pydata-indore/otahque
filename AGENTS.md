@@ -54,6 +54,9 @@ If a template or `static/otahque/source.css` changed, also run
 
 - Applies to: Python files, `templates/` and `events/templates/`,
   `config/settings.py`, and commands shown in docs. Indentation counts.
+- Exempt: migrations that `makemigrations` writes keep Django's own
+  layout, as the book prints them (Chapter 18). Only the agent runner
+  makes them, and nobody hand-wraps them.
 - Why: the code is printed in the book. A longer line wraps on the
   page, looks like two statements, and is retyped wrongly. Split with
   parentheses or implicit string concatenation instead.

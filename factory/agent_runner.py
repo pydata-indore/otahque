@@ -6,6 +6,7 @@ checks itself, and stops for help when the retry limit is hit.
 See factory/README.md.
 """
 
+import ast
 import html
 import json
 import os
@@ -52,36 +53,53 @@ SKIP_LABEL = re.compile(
 PROJECT_FILE = re.compile(
     r'\w[\w/.-]*\.(py|html|md|js|css|json|toml)')
 
-# The apps the agent may work in. Adding one is a reviewed
-# change to this list, never something the agent does.
-APPS = ('events', 'accounts')
-APP = '(?:' + '|'.join(APPS) + ')'
-SETTINGS = 'config/settings.py'
-
 # Docs the agent may change: no dots in the path, so nothing
 # like docs/../.env.
 DOCS = re.compile(r'docs/[\w/-]+\.md$')
 # A named doc longer than this is shown only up to it.
 DOC_LIMIT = 20000
 
-# The agent may change only these paths.
-ALLOWED = (
-    re.compile(APP + r'/(?!migrations/)[\w/]+\.(py|html)$'),
-    re.compile(APP + r'/migrations/__init__\.py$'),
-    re.compile(re.escape(SETTINGS) + '$'),
-    re.compile(r'templates/[\w/]+\.html$'),
-    re.compile(r'README\.md$'),
-    DOCS,
-)
-TESTS = re.compile(APP + r'/tests[\w/]*\.py$')
-# A new app's empty package files, allowed with its tests.
-PACKAGE = re.compile(APP + r'/(migrations/)?__init__\.py$')
-# Django imports this file when it loads migrations, so it
-# must stay empty at every stage, not only the tests step.
-MIGRATIONS_INIT = re.compile(APP + r'/migrations/__init__\.py$')
-# The only settings lines the agent may add or remove.
-APP_ENTRY = re.compile(r"\s+'\w+\.apps\.\w+Config',")
-USER_MODEL = re.compile(r"AUTH_USER_MODEL = '\w+\.\w+'")
+# Where the code lives comes from main's settings, read once by
+# project_layout() before the agent changes anything, so an
+# edit to the settings never widens the agent's own reach.
+# set_layout() fills in the names below; until then the agent
+# may change only README.md and docs/.
+LAYOUT_CODE = '''
+import json, sys
+from pathlib import Path
+from django.apps import apps
+from django.conf import settings
+root = Path.cwd().resolve()
+def rel(path):
+    path = Path(path).resolve()
+    if path != root and path.is_relative_to(root):
+        return path.relative_to(root).as_posix()
+def module(name):
+    __import__(name)
+    return rel(sys.modules[name].__file__)
+print('LAYOUT=' + json.dumps({
+    'apps': [rel(a.path) for a in apps.get_app_configs()],
+    'templates': [rel(d) for t in settings.TEMPLATES
+                  for d in t.get('DIRS', [])],
+    'settings': module(settings.SETTINGS_MODULE),
+    'urls': module(settings.ROOT_URLCONF),
+}))
+'''
+# A folder or file the layout may name: plain names only, so
+# nothing like .venv/ or ../.
+SAFE_PATH = re.compile(r'[A-Za-z_]\w*(/[A-Za-z_]\w*)*(\.py)?')
+# Never open to the agent, whatever the settings say. static/
+# waits until the run can rebuild site.css with npm.
+DENIED = re.compile(
+    r'(^|/)\.|^(factory|node_modules|static|build)(/|$)')
+# Settings no ticket may hand to the agent.
+PROTECTED = ('SECRET_KEY', 'DEBUG', 'ALLOWED_HOSTS')
+APPS, TEMPLATE_DIRS = [], []
+SETTINGS = URLS = PROJECT = ''
+ALLOWED = (re.compile(r'README\.md$'), DOCS)
+NOTHING = re.compile(r'(?!)')
+TESTS = PACKAGE = MIGRATIONS_INIT = MIGRATION = NOTHING
+
 CONTEXT = (
     'AGENTS.md', 'docs/STANDARDS.md', 'docs/BOOK_SYNC.md',
     'README.md', 'docs/design/erd.md',
@@ -99,6 +117,164 @@ BANNED = re.compile(
 
 class Blocked(Exception):
     """Stop the run and ask a human for help."""
+
+
+# ---------- the project layout and the ticket's steps ----------
+
+def any_of(paths):
+    """Return a regex group matching any of the paths."""
+    if not paths:
+        return '(?!)'
+    return '(?:' + '|'.join(map(re.escape, paths)) + ')'
+
+
+def safe(path):
+    """True if the layout may give the agent this path."""
+    return bool(path and SAFE_PATH.fullmatch(path)
+                and not DENIED.search(path))
+
+
+def set_layout(layout):
+    """Build the path rules from the project's layout.
+
+    layout is the dict LAYOUT_CODE prints: the local apps'
+    folders, the template folders, and the settings and URL
+    modules. Anything outside the repository was dropped there;
+    anything unsafe or denied is dropped here.
+    """
+    global APPS, TEMPLATE_DIRS, SETTINGS, URLS, PROJECT
+    global ALLOWED, TESTS, PACKAGE, MIGRATIONS_INIT, MIGRATION
+    APPS = [a for a in layout.get('apps') or [] if safe(a)]
+    TEMPLATE_DIRS = [d for d in layout.get('templates') or []
+                     if safe(d)]
+    SETTINGS = layout.get('settings') or ''
+    URLS = layout.get('urls') or ''
+    if not safe(SETTINGS):
+        SETTINGS = ''
+    if not safe(URLS):
+        URLS = ''
+    PROJECT = posixpath.dirname(SETTINGS)
+    app = any_of(APPS)
+    tests = any_of(APPS + ([PROJECT] if PROJECT else []))
+    files = [f for f in (SETTINGS, URLS) if f]
+    TESTS = re.compile(tests + r'/tests[\w/]*\.py$')
+    ALLOWED = (
+        re.compile(app + r'/(?!migrations/)[\w/]+\.(py|html)$'),
+        re.compile(app + r'/migrations/__init__\.py$'),
+        re.compile(any_of(files) + '$'),
+        TESTS,
+        re.compile(any_of(TEMPLATE_DIRS) + r'/[\w/]+\.html$'),
+        re.compile(r'README\.md$'),
+        DOCS,
+    )
+    # A new app's empty package files, allowed with its tests.
+    PACKAGE = re.compile(app + r'/(migrations/)?__init__\.py$')
+    # Django imports this file when it loads migrations, so it
+    # must stay empty at every stage, not only the tests step.
+    MIGRATIONS_INIT = re.compile(
+        app + r'/migrations/__init__\.py$')
+    # A file makemigrations writes. Only the runner makes them.
+    MIGRATION = re.compile(app + r'/migrations/\d{4}_\w+\.py$')
+
+
+def add_app(name):
+    """Add an app the ticket's startapp step just created."""
+    set_layout({'apps': APPS + [name],
+                'templates': TEMPLATE_DIRS,
+                'settings': SETTINGS, 'urls': URLS})
+
+
+def read_layout(output):
+    """Return the layout dict from LAYOUT_CODE's output."""
+    for line in output.splitlines():
+        if line.startswith('LAYOUT='):
+            try:
+                layout = json.loads(line[len('LAYOUT='):])
+            except json.JSONDecodeError:
+                break
+            if isinstance(layout, dict):
+                return layout
+    raise Blocked('Could not read the project layout from '
+                  'the settings:\n' + fence(tail(output)))
+
+
+def project_layout():
+    """Read where the code lives from the settings on main."""
+    code, out = manage('shell', '--no-imports', '-c',
+                       LAYOUT_CODE)
+    if code:
+        raise Blocked('Reading the settings failed:\n'
+                      + fence(tail(out)))
+    set_layout(read_layout(out))
+    if not (APPS and SETTINGS):
+        raise Blocked('The settings name no local app or no '
+                      'settings module inside the repository.')
+    log(f'- Layout from {SETTINGS}: apps '
+        + ', '.join(f'`{a}`' for a in APPS) + '; templates '
+        + (', '.join(f'`{d}`' for d in TEMPLATE_DIRS) or 'none')
+        + f'; URLs `{URLS or "none"}`')
+
+
+# What a ticket's "## Runner" section may ask for, one item a
+# line. Nothing else runs, and nothing else is accepted.
+STEP_STARTAPP = re.compile(r'startapp ([a-z_][a-z0-9_]*)')
+STEP_MIGRATIONS = re.compile(
+    r'makemigrations((?: [a-z_][a-z0-9_]*)*)'
+    r'(?: --name ([a-z_][a-z0-9_]*))?')
+STEP_SETTINGS = re.compile(
+    r'settings: *([A-Z][A-Z0-9_]*(?:, *[A-Z][A-Z0-9_]*)*)')
+
+
+def runner_steps(body):
+    """Return what the ticket's Runner section asks for.
+
+    startapp: apps to create; makemigrations: None, or the
+    command's arguments; settings: the settings the agent may
+    change. A ticket with no Runner section gets none of them.
+    A line the runner cannot use stops the run before any
+    model call, so the ticket can be fixed first.
+    """
+    body = (body or '').replace('\r\n', '\n')
+    steps = {'startapp': [], 'makemigrations': None,
+             'settings': []}
+    found = re.search(r'^## Runner\n(.*?)(?=^## |\Z)', body,
+                      re.S | re.M)
+    if not found:
+        return steps
+    for line in found[1].splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        item = item.removeprefix('- ').replace('`', '').strip()
+        app = STEP_STARTAPP.fullmatch(item)
+        migrate = STEP_MIGRATIONS.fullmatch(item)
+        names = STEP_SETTINGS.fullmatch(item)
+        if app:
+            steps['startapp'].append(app[1])
+        elif migrate:
+            args = migrate[1].split()
+            if migrate[2]:
+                args += ['--name', migrate[2]]
+            steps['makemigrations'] = args
+        elif names:
+            wanted = re.split(r', *', names[1])
+            refused = [n for n in wanted if n in PROTECTED]
+            if refused:
+                raise Blocked(
+                    'The ticket asks the agent to change '
+                    + ', '.join(refused) + ', which a ticket '
+                    'may never hand to it.')
+            steps['settings'] += wanted
+        else:
+            raise Blocked(
+                f'The Runner section has a line I cannot use: '
+                f'"{line.strip()}". Allowed: "startapp <app>", '
+                '"makemigrations [<app> ...] [--name <name>]", '
+                'and "settings: NAME, NAME".')
+    return steps
+
+
+STEPS = runner_steps('')
 
 
 # ---------- logging and commands ----------
@@ -288,17 +464,6 @@ def apply_one(edit, allowed, pending):
     pending[path] = old.replace(search, replace)
 
 
-def apps_to_create(issue):
-    """Return the listed apps the ticket names that are missing.
-
-    The runner creates these with startapp, as the book does,
-    so the model edits the same files a reader would.
-    """
-    return [app for app in APPS
-            if f'`{app}`' in issue['body']
-            and not (ROOT / app).exists()]
-
-
 def tracked(path):
     """True if Git already tracks the file on this branch."""
     code, out = run(['git', 'ls-files', '--', path])
@@ -317,7 +482,9 @@ def tests_step_path(path):
 
 
 def may_edit(path):
-    return any(rule.fullmatch(path) for rule in ALLOWED)
+    """True if the agent may write this path itself."""
+    return (not DENIED.search(path)
+            and any(rule.fullmatch(path) for rule in ALLOWED))
 
 
 def file_text(paths):
@@ -373,13 +540,29 @@ def step_files(issue):
     return code + ('\n\n' + docs if docs else '')
 
 
+def test_dirs():
+    """Return the folders whose tests the agent writes."""
+    return APPS + ([PROJECT] if PROJECT else [])
+
+
 def code_files():
+    """Return the code the agent sees: apps, templates, URLs.
+
+    From the project package only the URL module and its tests
+    are shown; settings are added where they may change.
+    """
+    places = APPS + TEMPLATE_DIRS + ([PROJECT] if PROJECT
+                                     else [])
+    if not places:
+        return []
     code, out = run(['git', 'ls-files', '--cached', '--others',
-                     '--exclude-standard', *APPS, 'templates'])
+                     '--exclude-standard', *places])
     return [
         p for p in out.split()
         if p.endswith(('.py', '.html'))
         and '/migrations/' not in p
+        and (not PROJECT or not p.startswith(PROJECT + '/')
+             or p == URLS or TESTS.fullmatch(p))
     ]
 
 
@@ -399,9 +582,15 @@ def changed_paths():
 
 
 def long_lines(paths):
+    """Return the lines over the limit in the agent's files.
+
+    Migrations the runner generated keep Django's own layout,
+    as the book prints them (Chapter 18, decision P6).
+    """
     problems = []
     for path in paths:
-        if not path.endswith(('.py', '.html')):
+        if (not path.endswith(('.py', '.html'))
+                or path in GENERATED):
             continue
         target = ROOT / path
         if not target.is_file():
@@ -415,43 +604,46 @@ def long_lines(paths):
     return problems
 
 
-def list_lines(text, name):
-    """Return the line numbers inside the list `name = [`."""
-    inside, start = set(), False
-    for number, line in enumerate(text.splitlines(), 1):
-        if line.startswith(name + ' = ['):
-            start = True
-        elif start and line.startswith(']'):
-            break
-        elif start:
-            inside.add(number)
-    return inside
+def setting_owners(text):
+    """Map each line of a settings file to the setting it sets.
 
-
-def comment_for_user_model(lines, number):
-    """True if the comments at `number` lead to the setting."""
-    for line in lines[number - 1:]:
-        if not line.startswith('#'):
-            return bool(USER_MODEL.fullmatch(line))
-    return False
-
-
-def allowed_line(text, number, apps, lines):
-    """True if the agent may change this settings line."""
-    return bool(
-        not text.strip()
-        or USER_MODEL.fullmatch(text)
-        or (number in apps and APP_ENTRY.fullmatch(text))
-        or (text.startswith('#')
-            and comment_for_user_model(lines, number)))
+    A line of a top-level `NAME = ...` (or `NAME += ...`)
+    belongs to NAME, and so do the comment lines directly above
+    it. A line of any other statement, such as an import, a
+    docstring or a try block, belongs to ''. So do comments
+    that lead to no statement. Blank lines between statements
+    belong to nothing and are left out. Raise SyntaxError if
+    the file does not parse.
+    """
+    lines = text.splitlines()
+    owners = {}
+    for node in ast.parse(text).body:
+        target = None
+        if (isinstance(node, ast.Assign)
+                and len(node.targets) == 1):
+            target = node.targets[0]
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            target = node.target
+        name = target.id if isinstance(target, ast.Name) else ''
+        for number in range(node.lineno, node.end_lineno + 1):
+            owners[number] = name
+        number = node.lineno - 1
+        while number >= 1 and lines[number - 1].startswith('#'):
+            owners[number] = name
+            number -= 1
+    for number, line in enumerate(lines, 1):
+        if number not in owners and line.strip():
+            owners[number] = ''
+    return owners
 
 
 def settings_problems():
     """Return settings lines the agent may not add or remove.
 
-    Allowed: an app entry inside INSTALLED_APPS, the
-    AUTH_USER_MODEL line, comments directly above it, and blank
-    lines. Secrets, DEBUG and hosts stay out of reach.
+    A changed line must belong to a setting the ticket's Runner
+    section names, or be a blank line between statements. The
+    protected settings, imports, and the try block that reads
+    the secret key are never open to the agent.
     """
     code, out = run(['git', 'diff', '-U0', 'HEAD', '--',
                      SETTINGS])
@@ -459,9 +651,16 @@ def settings_problems():
         return []
     code, old = run(['git', 'show', f'HEAD:{SETTINGS}'])
     new = (ROOT / SETTINGS).read_text(encoding='utf-8')
-    old_apps = list_lines(old, 'INSTALLED_APPS')
-    new_apps = list_lines(new, 'INSTALLED_APPS')
-    old_lines, new_lines = old.splitlines(), new.splitlines()
+    try:
+        new_owners = setting_owners(new)
+    except SyntaxError as error:
+        return [f'{SETTINGS} does not parse: {error}']
+    old_owners = setting_owners(old)
+    open_ = set(STEPS['settings']) - set(PROTECTED)
+
+    def allowed(owner):
+        return owner is None or owner in open_
+
     problems = []
     old_n = new_n = None
     for line in out.splitlines():
@@ -475,11 +674,11 @@ def settings_problems():
         # The same rule both ways, so the agent can also
         # replace or remove the setting it added.
         if line[0] == '-':
-            ok = allowed_line(text, old_n, old_apps, old_lines)
+            ok = allowed(old_owners.get(old_n))
             where = f'removed line {old_n}'
             old_n += 1
         else:
-            ok = allowed_line(text, new_n, new_apps, new_lines)
+            ok = allowed(new_owners.get(new_n))
             where = f'line {new_n}'
             new_n += 1
         if not ok:
@@ -491,12 +690,87 @@ def manage(*args):
     return run(['uv', 'run', 'python', 'manage.py', *args])
 
 
-def run_checks():
-    """Return (passed, report) for the current working tree."""
+# Migration files makemigrations wrote in this run.
+GENERATED = []
+# main's commit, which the run's own migrations are new against.
+BASE = 'HEAD'
+# True once main has migrations and none pending: from then on
+# a change that needs a migration fails the checks.
+MAIN_CLEAN = False
+
+
+def migrations_started():
+    """True if main has migrations and no pending model changes.
+
+    Before the first migration (Chapters 15 to 17) models are
+    written on purpose without one, so pending changes are only
+    recorded until then.
+    """
+    code, out = run(['git', 'ls-files'])
+    if not any(MIGRATION.fullmatch(p) for p in out.split()):
+        return False
+    code, out = manage('makemigrations', '--check', '--dry-run')
+    return code == 0
+
+
+def run_migrations():
+    """Return the migration files added since main, in this run.
+
+    Both kinds count: files not committed yet, and files the
+    run already committed on its branch before a review round.
+    """
+    code, added = run(['git', 'diff', '--name-only',
+                       '--diff-filter=A', BASE])
+    code, new = run(['git', 'ls-files', '--others',
+                     '--exclude-standard'])
+    return sorted({p for p in added.split() + new.split()
+                   if MIGRATION.fullmatch(p)})
+
+
+def keep_committed(path):
+    """Restore a regenerated migration that differs only in time.
+
+    Django's first line records when the file was made, so a
+    review round would otherwise change every migration.
+    """
+    code, old = run(['git', 'show', f'HEAD:{path}'])
+    if code:
+        return
+    new = (ROOT / path).read_text(encoding='utf-8')
+    if old.partition('\n')[2] == new.partition('\n')[2]:
+        (ROOT / path).write_text(old, encoding='utf-8')
+
+
+def make_migrations():
+    """Write the migrations the ticket asks for, from the models.
+
+    The files this run made earlier are removed first, so the
+    migrations always match the current models. The agent
+    never writes or edits a migration itself.
+    """
+    for path in run_migrations():
+        (ROOT / path).unlink(missing_ok=True)
+    code, out = manage('makemigrations',
+                       *STEPS['makemigrations'])
+    GENERATED[:] = run_migrations()
+    for path in GENERATED:
+        keep_committed(path)
+    return code, out
+
+
+def run_checks(baseline=False):
+    """Return (passed, report) for the current working tree.
+
+    The baseline run on main generates nothing and only records
+    pending migrations.
+    """
+    generate = (STEPS['makemigrations'] is not None
+                and not baseline)
     paths = changed_paths()
     report = []
     passed = True
-    banned = [p for p in paths if not may_edit(p)]
+    banned = [p for p in paths
+              if not may_edit(p) and p not in GENERATED]
     if banned:
         passed = False
         report.append('Not allowed: ' + ', '.join(banned))
@@ -515,8 +789,10 @@ def run_checks():
     if settings:
         passed = False
         report.append(
-            'Settings changes not allowed (only an '
-            'INSTALLED_APPS entry and AUTH_USER_MODEL):\n'
+            'Settings changes not allowed. The ticket opens '
+            + (', '.join(STEPS['settings']) or 'no setting')
+            + '; ' + ', '.join(PROTECTED) + ', imports, and '
+            'the try block are never open:\n'
             + '\n'.join(settings))
     # Django imports the project when it runs, so code in a
     # refused place must never get that far.
@@ -524,6 +800,15 @@ def run_checks():
         report.append('Django checks and tests not run until '
                       'the problems above are fixed.')
         return False, '\n\n'.join(report)
+    if generate:
+        code, out = make_migrations()
+        report.append(' '.join(['$ manage.py makemigrations',
+                                *STEPS['makemigrations']])
+                      + '\n' + tail(out, 15))
+        if code:
+            report.append('makemigrations failed, so the '
+                          'checks and tests were not run.')
+            return False, '\n\n'.join(report)
     code, out = manage('check')
     passed = passed and code == 0
     report.append('$ manage.py check\n' + tail(out, 20))
@@ -532,9 +817,18 @@ def run_checks():
     report.append('$ manage.py test\n' + tail(out))
     code, out = manage(
         'makemigrations', '--check', '--dry-run')
+    strict = generate or (MAIN_CLEAN and not baseline)
+    if strict:
+        passed = passed and code == 0
     report.append(
         '$ manage.py makemigrations --check --dry-run'
-        f' (exit {code}, recorded only)\n' + tail(out, 10))
+        f' (exit {code}{"" if strict else ", recorded only"})'
+        '\n' + tail(out, 10))
+    if strict and code:
+        report.append(
+            'A model change has no migration. The agent cannot '
+            'write one: if the change is right, the ticket\'s '
+            'Runner section needs a makemigrations line.')
     return passed, '\n\n'.join(report)
 
 
@@ -542,11 +836,16 @@ def fails_for_new_code(out):
     """True if a new test fails, or the new code is missing.
 
     A missing name (ImportError, AttributeError) means the
-    code under test does not exist yet; otherwise one of the
-    test methods added in this run must be among the failures.
+    code under test does not exist yet, and so does a missing
+    migration when the ticket has the runner make it. Otherwise
+    one of the test methods added in this run must be among the
+    failures.
     """
     if re.search(r'cannot import name|has no attribute'
                  r'|No module named', out):
+        return True
+    if (STEPS['makemigrations'] is not None and re.search(
+            r'Dependency on app with no migrations', out)):
         return True
     failed = re.findall(r'^(?:FAIL|ERROR): (test_\w+)',
                         out, re.M)
@@ -555,11 +854,12 @@ def fails_for_new_code(out):
 
 def added_test_names():
     """Return test methods added in this run, new files too."""
-    code, added = run(['git', 'diff', '-U0', '--', *APPS])
+    code, added = run(['git', 'diff', '-U0', '--',
+                       *test_dirs()])
     names = set(re.findall(r'^\+\s*def (test_\w+)', added,
                            re.M))
     code, new = run(['git', 'ls-files', '--others',
-                     '--exclude-standard', '--', *APPS])
+                     '--exclude-standard', '--', *test_dirs()])
     for path in new.split():
         if TESTS.fullmatch(path):
             text = (ROOT / path).read_text(encoding='utf-8')
@@ -921,6 +1221,8 @@ def main():
         '--json', 'title,body,state'))
     if issue['state'] != 'OPEN':
         raise Blocked(f'#{ISSUE} is not open.')
+    global STEPS, MAIN_CLEAN, BASE
+    STEPS = runner_steps(issue['body'])
     set_label('agent-working', ['ready-for-agent'])
     comment('issue', ISSUE,
             f'The agent picked this up. Run: {RUN_URL}')
@@ -931,17 +1233,27 @@ def main():
     if out.strip():
         raise Blocked(f'Branch {branch} already exists; '
                       'delete or rename it first.')
+    code, out = run(['git', 'rev-parse', 'HEAD'])
+    BASE = out.strip()
     run(['git', 'switch', '-c', branch])
     log(f'Branch: `{branch}`\n')
 
     log('### 1. Baseline checks')
-    ok, report = run_checks()
+    project_layout()
+    log('- Runner steps from the ticket: ' + json.dumps(STEPS))
+    ok, report = run_checks(baseline=True)
     if not ok:
         raise Blocked('main fails its checks before any '
                       'change:\n' + fence(report))
     baseline = test_count(report)
-    log(f'- main passes: {baseline} tests\n')
-    for app in apps_to_create(issue):
+    MAIN_CLEAN = migrations_started()
+    log(f'- main passes: {baseline} tests; a missing '
+        'migration ' + ('fails the checks' if MAIN_CLEAN
+                        else 'is only recorded') + '\n')
+    for app in STEPS['startapp']:
+        if (ROOT / app).exists():
+            raise Blocked(f'The ticket asks for startapp {app}, '
+                          f'but {app}/ already exists.')
         code, out = manage('startapp', app)
         if code:
             raise Blocked(f'startapp {app} failed:\n'
@@ -950,15 +1262,16 @@ def main():
         code, out = run(['git', 'ls-files', '--others',
                          '--exclude-standard', app])
         STARTAPP_FILES.extend(out.split())
+        add_app(app)
 
     log('### 2. Tests first')
     messages = [
         {'role': 'system', 'content': RULES},
         {'role': 'user', 'content': project_brief(issue) + (
             '\n\nStep 1 of 2: write ONLY the new or changed '
-            'tests the ticket asks for, in the tests.py of the '
-            'app the ticket names (' + ', '.join(
-                f'{app}/tests.py' for app in APPS) + '). '
+            'tests the ticket asks for, in the tests.py the '
+            'ticket names (' + ', '.join(
+                f'{d}/tests.py' for d in test_dirs()) + '). '
             'A new app the ticket names was already created '
             'with startapp; its files are shown above. Keep '
             'its __init__.py files empty. Do not touch any '
@@ -1168,14 +1481,21 @@ def criterion_label(c, ticket):
 
 
 def startapp_note():
-    """Tell the criteria check which files startapp made."""
-    if not STARTAPP_FILES:
-        return ''
-    return (
-        'The script ran startapp before the model, which '
-        'created: ' + ', '.join(STARTAPP_FILES) + '. Their '
-        'stub content is not the model\'s change; judge only '
-        'what the model added to them.\n\n')
+    """Tell the criteria check which files the script made."""
+    note = ''
+    if STARTAPP_FILES:
+        note += (
+            'The script ran startapp before the model, which '
+            'created: ' + ', '.join(STARTAPP_FILES) + '. Their '
+            'stub content is not the model\'s change; judge '
+            'only what the model added to them.\n\n')
+    if GENERATED:
+        note += (
+            'The script ran makemigrations, which wrote: '
+            + ', '.join(GENERATED) + '. They are Django\'s '
+            'output, kept exactly as generated, so their long '
+            'lines and header are expected.\n\n')
+    return note
 
 
 def accept(issue, report, red):
