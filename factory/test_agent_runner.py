@@ -769,6 +769,86 @@ class SearchFeedbackTests(unittest.TestCase):
             '"""Tests for the accounts app."""\n')
         self.assertIn('not in this order', message)
 
+    def test_a_line_wanted_twice_but_there_once_is_named(self):
+        old = '"""Doc."""\nx = 1\n'
+        message = agent_runner.search_problem(
+            'a.py', old, 'x = 1\nx = 1\n', 0)
+        self.assertIn('2 times', message)
+
+    def test_a_missing_final_line_break_is_named(self):
+        old = '"""Doc."""\nx = 1'
+        message = agent_runner.search_problem(
+            'a.py', old, 'x = 1\n', 0)
+        self.assertIn('line break', message)
+
+    def setup_root(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        self.addCleanup(setattr, agent_runner, 'changed_paths',
+                        agent_runner.changed_paths)
+        agent_runner.ROOT = Path(self.tmp.name)
+        agent_runner.changed_paths = lambda: []
+        use_layout(self)
+        (agent_runner.ROOT / 'accounts').mkdir()
+        (agent_runner.ROOT / 'accounts/tests.py').write_text(
+            self.OLD)
+        (agent_runner.ROOT / '.env').write_text('SECRET=1\n')
+
+    def test_a_symlink_to_env_is_never_shown(self):
+        self.setup_root()
+        link = agent_runner.ROOT / 'accounts/tests_link.py'
+        try:
+            link.symlink_to(agent_runner.ROOT / '.env')
+        except OSError:
+            self.skipTest('symlinks need extra rights here')
+        reply = block('accounts/tests_link.py', 'x\n', 'y\n')
+        self.assertEqual(agent_runner.retry_files(
+            reply, agent_runner.tests_step_path), [])
+
+    def test_a_folder_link_out_of_the_repo_is_never_shown(self):
+        # A junction (Windows) or symlinked folder: the file is
+        # not itself a link, but it resolves outside the repo.
+        self.setup_root()
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        (Path(outside.name) / 'tests.py').write_text('SECRET\n')
+        link = agent_runner.ROOT / 'accounts/tests_dir'
+        if os.name == 'nt':
+            made = agent_runner.run(
+                ['cmd', '/c', 'mklink', '/J', str(link),
+                 outside.name])[0] == 0
+        else:
+            link.symlink_to(outside.name)
+            made = True
+        if not made:
+            self.skipTest('could not make a folder link')
+        self.addCleanup(lambda: os.path.isdir(link)
+                        and os.rmdir(link))
+        reply = block('accounts/tests_dir/tests.py', 'x\n', 'y\n')
+        self.assertTrue(agent_runner.tests_step_path(
+            'accounts/tests_dir/tests.py'))
+        self.assertEqual(agent_runner.retry_files(
+            reply, agent_runner.tests_step_path), [])
+
+    def test_a_block_missing_a_marker_still_shows_its_file(self):
+        self.setup_root()
+        reply = ('FILE: accounts/tests.py\n<<<<<<< SEARCH\nx\n'
+                 '>>>>>>> REPLACE\n')
+        self.assertEqual(agent_runner.retry_files(
+            reply, agent_runner.tests_step_path),
+            ['accounts/tests.py'])
+
+    def test_a_long_doc_keeps_its_limit_on_a_retry(self):
+        self.setup_root()
+        (agent_runner.ROOT / 'docs').mkdir()
+        big = agent_runner.ROOT / 'docs/big.md'
+        big.write_text('A line.\n' * agent_runner.DOC_LIMIT)
+        text = agent_runner.retry_text(['docs/big.md'])
+        self.assertIn('cut here', text)
+        self.assertLess(len(text), agent_runner.DOC_LIMIT + 300)
+
     def test_the_retry_shows_the_files_the_reply_named(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
