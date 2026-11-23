@@ -17,6 +17,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agent_runner  # noqa: E402
 
+# The layout project_layout() reads from this project's settings.
+LAYOUT = {'apps': ['accounts', 'events'],
+          'templates': ['templates'],
+          'settings': 'config/settings.py',
+          'urls': 'config/urls.py'}
+
+
+def use_layout(test, layout=LAYOUT, **steps):
+    """Give the runner a layout and steps for one test."""
+    for name in ('APPS', 'TEMPLATE_DIRS', 'SETTINGS', 'URLS',
+                 'PROJECT', 'ALLOWED', 'TESTS', 'PACKAGE',
+                 'MIGRATIONS_INIT', 'MIGRATION', 'STEPS',
+                 'MAIN_CLEAN'):
+        test.addCleanup(setattr, agent_runner, name,
+                        getattr(agent_runner, name))
+    agent_runner.set_layout(layout)
+    agent_runner.STEPS = {'startapp': [],
+                          'makemigrations': None,
+                          'settings': [], **steps}
+
 
 def block(path, search, replace):
     """Return one edit block in the format the model uses."""
@@ -116,6 +136,7 @@ class TestsStepPathTests(unittest.TestCase):
         agent_runner.ROOT = self.root
         self.addCleanup(setattr, agent_runner, 'ROOT',
                         self.old_root)
+        use_layout(self)
         (self.root / 'events').mkdir()
         (self.root / 'events/__init__.py').write_text('')
         for args in (['init', '-q'],
@@ -146,31 +167,6 @@ class TestsStepPathTests(unittest.TestCase):
     def test_other_app_files_are_refused(self):
         self.assertFalse(self.allowed('accounts/models.py'))
 
-
-
-class AppsToCreateTests(unittest.TestCase):
-    """The runner creates a listed app the ticket names."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.addCleanup(setattr, agent_runner, 'ROOT',
-                        agent_runner.ROOT)
-        agent_runner.ROOT = Path(self.tmp.name)
-        (agent_runner.ROOT / 'events').mkdir()
-
-    def apps(self, body):
-        return agent_runner.apps_to_create({'body': body})
-
-    def test_a_named_missing_app_is_created(self):
-        self.assertEqual(self.apps('A new `accounts` app'),
-                         ['accounts'])
-
-    def test_an_existing_app_is_not_created_again(self):
-        self.assertEqual(self.apps('Change `events`'), [])
-
-    def test_an_app_not_in_the_list_is_ignored(self):
-        self.assertEqual(self.apps('A new `payments` app'), [])
 
 
 class TicketDocsTests(unittest.TestCase):
@@ -291,6 +287,7 @@ class RunChecksTests(unittest.TestCase):
             self.addCleanup(setattr, agent_runner, name,
                             getattr(agent_runner, name))
             setattr(agent_runner, name, value)
+        use_layout(self)
 
     def check(self, *paths):
         self.addCleanup(setattr, agent_runner, 'changed_paths',
@@ -320,6 +317,418 @@ class RunChecksTests(unittest.TestCase):
         self.assertTrue(passed)
         self.assertIn(('check',), self.calls)
         self.assertIn(('test',), self.calls)
+
+
+class LayoutTests(unittest.TestCase):
+    """The agent's paths come from the settings' layout."""
+
+    def setUp(self):
+        use_layout(self)
+
+    def test_app_code_and_templates_are_open(self):
+        for path in ('events/models.py', 'accounts/managers.py',
+                     'events/templates/events/list.html',
+                     'templates/base.html', 'config/urls.py',
+                     'config/settings.py', 'docs/adr/ADR-3.md'):
+            self.assertTrue(agent_runner.may_edit(path), path)
+
+    def test_project_tests_count_as_tests(self):
+        self.assertTrue(
+            agent_runner.TESTS.fullmatch('config/tests.py'))
+        self.assertTrue(agent_runner.may_edit('config/tests.py'))
+
+    def test_other_project_files_are_closed(self):
+        for path in ('config/wsgi.py', 'config/asgi.py',
+                     'manage.py', 'pyproject.toml'):
+            self.assertFalse(agent_runner.may_edit(path), path)
+
+    def test_migrations_are_closed_to_the_agent(self):
+        path = 'events/migrations/0001_initial.py'
+        self.assertFalse(agent_runner.may_edit(path))
+        self.assertTrue(agent_runner.MIGRATION.fullmatch(path))
+
+    def test_denied_places_stay_closed(self):
+        for path in ('factory/agent_runner.py', '.env',
+                     '.github/workflows/agent.yml',
+                     'static/otahque/site.css'):
+            self.assertFalse(agent_runner.may_edit(path), path)
+
+    def test_an_unsafe_layout_entry_is_dropped(self):
+        use_layout(self, {
+            'apps': ['events', '.venv/lib/admin', 'factory',
+                     None, '../other'],
+            'templates': ['static', ''],
+            'settings': 'config/settings.py', 'urls': None})
+        self.assertEqual(agent_runner.APPS, ['events'])
+        self.assertEqual(agent_runner.TEMPLATE_DIRS, [])
+        self.assertFalse(agent_runner.may_edit('factory/x.py'))
+        self.assertFalse(agent_runner.may_edit('static/a.html'))
+
+    def test_an_app_not_in_the_settings_is_closed(self):
+        path = 'payments/views.py'
+        self.assertFalse(agent_runner.may_edit(path))
+        agent_runner.add_app('payments')
+        self.assertTrue(agent_runner.may_edit(path))
+
+    def test_the_layout_line_is_found_in_noisy_output(self):
+        out = ('warning\nLAYOUT={"apps": ["events"], '
+               '"settings": "config/settings.py"}\n')
+        layout = agent_runner.read_layout(out)
+        self.assertEqual(layout['apps'], ['events'])
+
+    def test_output_without_a_layout_stops_the_run(self):
+        with self.assertRaises(agent_runner.Blocked):
+            agent_runner.read_layout('Traceback ...\n')
+
+
+class RunnerStepsTests(unittest.TestCase):
+    """The ticket's Runner section says what the runner does."""
+
+    def steps(self, section):
+        return agent_runner.runner_steps(
+            '## Intended result\n\nText.\n\n## Runner\n\n'
+            + section + '\n## Not in this ticket\n\n- x\n')
+
+    def test_no_section_asks_for_nothing(self):
+        steps = agent_runner.runner_steps('## Intended result\n')
+        self.assertEqual(steps, {'startapp': [],
+                                 'makemigrations': None,
+                                 'settings': []})
+
+    def test_every_step_is_read(self):
+        steps = self.steps(
+            '- `startapp accounts`\n- `makemigrations`\n'
+            '- settings: INSTALLED_APPS, AUTH_USER_MODEL\n')
+        self.assertEqual(steps['startapp'], ['accounts'])
+        self.assertEqual(steps['makemigrations'], [])
+        self.assertEqual(steps['settings'],
+                         ['INSTALLED_APPS', 'AUTH_USER_MODEL'])
+
+    def test_makemigrations_takes_apps_and_a_name(self):
+        steps = self.steps(
+            '- makemigrations events --name event_slug\n')
+        self.assertEqual(steps['makemigrations'],
+                         ['events', '--name', 'event_slug'])
+
+    def test_windows_line_endings_are_read(self):
+        steps = agent_runner.runner_steps(
+            '## Runner\r\n\r\n- makemigrations\r\n')
+        self.assertEqual(steps['makemigrations'], [])
+
+    def test_an_unknown_line_stops_the_run(self):
+        for line in ('- migrate', '- makemigrations; rm -rf .',
+                     '- startapp ../x', '- settings: debug'):
+            with self.assertRaisesRegex(agent_runner.Blocked,
+                                        'cannot use'):
+                self.steps(line + '\n')
+
+    def test_a_protected_setting_stops_the_run(self):
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'SECRET_KEY'):
+            self.steps('- settings: MIDDLEWARE, SECRET_KEY\n')
+
+
+SETTINGS = '''"""Settings for the test project."""
+
+from decouple import config
+
+try:
+    SECRET_KEY = config('DJANGO_SECRET_KEY')
+except KeyError:
+    raise
+
+DEBUG = config('DJANGO_DEBUG', default='') == 'True'
+
+INSTALLED_APPS = [
+    'django.contrib.auth',
+    'events.apps.EventsConfig',
+]
+
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+]
+'''
+SECURITY = ("    'django.middleware.security."
+            "SecurityMiddleware',\n")
+
+
+class SettingsGuardTests(unittest.TestCase):
+    """Only the settings a ticket names may change."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        agent_runner.ROOT = Path(self.tmp.name)
+        use_layout(self, settings=['INSTALLED_APPS',
+                                   'AUTH_USER_MODEL'])
+        self.path = agent_runner.ROOT / 'config/settings.py'
+        self.path.parent.mkdir()
+        self.path.write_text(SETTINGS)
+        for args in (['init', '-q'], ['add', '.'],
+                     ['-c', 'user.name=t', '-c',
+                      'user.email=t@example.com',
+                      'commit', '-q', '-m', 'start']):
+            agent_runner.run(['git', *args])
+
+    def change(self, old, new):
+        text = self.path.read_text()
+        self.assertIn(old, text)
+        self.path.write_text(text.replace(old, new, 1))
+        return agent_runner.settings_problems()
+
+    def test_no_change_has_no_problems(self):
+        self.assertEqual(agent_runner.settings_problems(), [])
+
+    def test_an_app_entry_in_a_named_setting_passes(self):
+        self.assertEqual(self.change(
+            "    'events.apps.EventsConfig',\n",
+            "    'accounts.apps.AccountsConfig',\n"
+            "    'events.apps.EventsConfig',\n"), [])
+
+    def test_a_new_named_setting_with_its_comment_passes(self):
+        self.assertEqual(self.change(
+            ']\n\nMIDDLEWARE', "]\n\n# See ADR-002.\n"
+            "AUTH_USER_MODEL = 'accounts.User'\n\nMIDDLEWARE"),
+            [])
+
+    def test_a_setting_the_ticket_does_not_name_fails(self):
+        problems = self.change(
+            SECURITY, SECURITY + "    'x.Middleware',\n")
+        self.assertEqual(len(problems), 1)
+        self.assertIn('x.Middleware', problems[0])
+
+    def test_a_named_setting_opens_it(self):
+        agent_runner.STEPS['settings'].append('MIDDLEWARE')
+        self.assertEqual(self.change(
+            SECURITY, SECURITY + "    'x.Middleware',\n"), [])
+
+    def test_a_protected_setting_fails_even_if_named(self):
+        agent_runner.STEPS['settings'].append('DEBUG')
+        problems = self.change(
+            "DEBUG = config('DJANGO_DEBUG', default='') "
+            "== 'True'", 'DEBUG = True')
+        self.assertEqual(len(problems), 2)
+
+    def test_the_secret_key_block_is_closed(self):
+        problems = self.change(
+            "    SECRET_KEY = config('DJANGO_SECRET_KEY')",
+            "    SECRET_KEY = 'x'")
+        self.assertTrue(problems)
+
+    def test_a_new_secret_key_line_fails(self):
+        problems = self.change(
+            '\nDEBUG =', "\nSECRET_KEY = 'x'\nDEBUG =")
+        self.assertTrue(problems)
+
+    def test_an_import_fails(self):
+        problems = self.change(
+            'from decouple import config\n',
+            'from decouple import config\nimport os\n')
+        self.assertEqual(len(problems), 1)
+
+    def test_a_blank_line_inside_a_docstring_fails(self):
+        problems = self.change(
+            '"""Settings for the test project."""',
+            '"""Settings for the test project.\n\nMore."""')
+        self.assertTrue(problems)
+
+    def test_a_blank_line_between_statements_passes(self):
+        self.assertEqual(self.change(
+            ']\n\nMIDDLEWARE', ']\n\n\nMIDDLEWARE'), [])
+
+    def test_a_comment_not_above_a_named_setting_fails(self):
+        problems = self.change(
+            '\nDEBUG =', '\n# A note.\n\nDEBUG =')
+        self.assertEqual(len(problems), 1)
+
+    def test_a_file_that_does_not_parse_fails(self):
+        problems = self.change('INSTALLED_APPS = [',
+                               'INSTALLED_APPS = [[')
+        self.assertIn('does not parse', problems[0])
+
+
+class MigrationStepTests(unittest.TestCase):
+    """Only the runner writes migrations, kept as written."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.made = []
+        self.pending = 0
+        fake = {
+            'ROOT': self.root,
+            'manage': self.manage,
+            'run_migrations': lambda: [
+                p for p in self.made
+                if (self.root / p).exists()],
+            'GENERATED': [],
+        }
+        for name, value in fake.items():
+            self.addCleanup(setattr, agent_runner, name,
+                            getattr(agent_runner, name))
+            setattr(agent_runner, name, value)
+        use_layout(self, makemigrations=[])
+        (self.root / 'events/migrations').mkdir(parents=True)
+
+    def manage(self, *args):
+        """Stand in for manage.py; makemigrations writes."""
+        if args == ('makemigrations',):
+            number = len(self.made) + 1
+            name = f'events/migrations/{number:04d}_x.py'
+            # Django's lines run past 65 characters.
+            (self.root / name).write_text('x = ' + '1' * 90)
+            self.made.append(name)
+            return 0, 'Migrations for events'
+        if args[:2] == ('makemigrations', '--check'):
+            return self.pending, 'No changes detected'
+        return 0, 'OK'
+
+    def check(self, *paths):
+        self.addCleanup(setattr, agent_runner, 'changed_paths',
+                        agent_runner.changed_paths)
+        agent_runner.changed_paths = lambda: list(paths)
+        return agent_runner.run_checks()
+
+    def test_generated_migrations_pass_the_checks(self):
+        passed, report = self.check()
+        self.assertTrue(passed, report)
+        made = list(agent_runner.GENERATED)
+        self.assertEqual(made, ['events/migrations/0001_x.py'])
+        # On the next attempt the generated file is a change.
+        passed, report = self.check(*made)
+        self.assertTrue(passed, report)
+        self.assertNotIn('Lines over', report)
+
+    def test_each_attempt_replaces_the_last_ones(self):
+        self.check()
+        first = agent_runner.GENERATED[0]
+        self.check(first)
+        self.assertFalse((self.root / first).exists())
+        self.assertEqual(len(agent_runner.GENERATED), 1)
+
+    def test_a_migration_from_the_agent_is_refused(self):
+        passed, report = self.check(
+            'events/migrations/0009_mine.py')
+        self.assertFalse(passed)
+        self.assertIn('Not allowed', report)
+        self.assertEqual(self.made, [])
+
+    def test_pending_changes_fail_when_migrating(self):
+        self.pending = 1
+        passed, report = self.check()
+        self.assertFalse(passed)
+        self.assertIn('has no migration', report)
+
+    def test_pending_changes_are_recorded_on_main(self):
+        self.pending = 1
+        agent_runner.STEPS['makemigrations'] = None
+        passed, report = self.check()
+        self.assertTrue(passed)
+        self.assertIn('recorded only', report)
+
+    def test_pending_changes_fail_once_main_is_clean(self):
+        self.pending = 1
+        agent_runner.STEPS['makemigrations'] = None
+        agent_runner.MAIN_CLEAN = True
+        passed, report = self.check()
+        self.assertFalse(passed)
+
+    def test_the_baseline_never_generates(self):
+        self.pending = 1
+        agent_runner.MAIN_CLEAN = True
+        self.addCleanup(setattr, agent_runner, 'changed_paths',
+                        agent_runner.changed_paths)
+        agent_runner.changed_paths = list
+        passed, report = agent_runner.run_checks(baseline=True)
+        self.assertTrue(passed, report)
+        self.assertEqual(self.made, [])
+
+    def started(self, files):
+        self.addCleanup(setattr, agent_runner, 'run',
+                        agent_runner.run)
+        agent_runner.run = lambda args: (0, '\n'.join(files))
+        return agent_runner.migrations_started()
+
+    def test_no_migration_file_means_not_started(self):
+        # Chapters 15 to 17: models, on purpose no migration.
+        self.assertFalse(self.started(['events/models.py']))
+
+    def test_clean_migrations_mean_started(self):
+        self.assertTrue(self.started(
+            ['events/migrations/0001_initial.py']))
+
+    def test_pending_changes_mean_not_started(self):
+        self.pending = 1
+        self.assertFalse(self.started(
+            ['events/migrations/0001_initial.py']))
+
+    def test_a_missing_migration_counts_as_red(self):
+        out = ('Found 29 test(s).\nValueError: Dependency on '
+               'app with no migrations: accounts\n')
+        self.assertTrue(agent_runner.fails_for_new_code(out))
+        agent_runner.STEPS['makemigrations'] = None
+        self.addCleanup(setattr, agent_runner,
+                        'added_test_names',
+                        agent_runner.added_test_names)
+        agent_runner.added_test_names = set
+        self.assertFalse(agent_runner.fails_for_new_code(out))
+
+
+class KeepCommittedTests(unittest.TestCase):
+    """Review rounds keep a migration whose time alone is new."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        agent_runner.ROOT = Path(self.tmp.name)
+        use_layout(self)
+        self.path = 'events/migrations/0001_initial.py'
+        target = agent_runner.ROOT / self.path
+        target.parent.mkdir(parents=True)
+        target.write_text('# Generated on Monday\nx = 1\n')
+        for args in (['init', '-q'], ['add', '.'],
+                     ['-c', 'user.name=t', '-c',
+                      'user.email=t@example.com',
+                      'commit', '-q', '-m', 'start']):
+            agent_runner.run(['git', *args])
+
+    def regenerate(self, text):
+        target = agent_runner.ROOT / self.path
+        target.write_text(text)
+        agent_runner.keep_committed(self.path)
+        return target.read_text()
+
+    def test_a_new_time_only_keeps_the_committed_file(self):
+        self.assertEqual(
+            self.regenerate('# Generated on Tuesday\nx = 1\n'),
+            '# Generated on Monday\nx = 1\n')
+
+    def test_a_real_change_is_kept(self):
+        self.assertEqual(
+            self.regenerate('# Generated on Tuesday\nx = 2\n'),
+            '# Generated on Tuesday\nx = 2\n')
+
+    def test_committed_migrations_count_as_this_runs(self):
+        agent_runner.BASE = 'HEAD'
+        self.addCleanup(setattr, agent_runner, 'BASE', 'HEAD')
+        code, first = agent_runner.run(
+            ['git', 'rev-parse', 'HEAD'])
+        new = 'events/migrations/0002_more.py'
+        (agent_runner.ROOT / new).write_text('y = 1\n')
+        self.assertEqual(agent_runner.run_migrations(), [new])
+        agent_runner.run(['git', 'add', '.'])
+        agent_runner.run(['git', '-c', 'user.name=t', '-c',
+                          'user.email=t@example.com', 'commit',
+                          '-q', '-m', 'branch'])
+        # Against main's commit the committed file still counts,
+        # and main's own 0001 does not.
+        agent_runner.BASE = first.strip()
+        self.assertEqual(agent_runner.run_migrations(), [new])
 
 
 if __name__ == '__main__':

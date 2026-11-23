@@ -9,24 +9,35 @@ the issue number.
 ## What the run does
 
 1. Labels the issue `agent-working` and links the run.
-2. Runs the checks on `main` first; a failing `main` stops it.
+2. Reads where the code lives from the settings on `main` (see
+   "Where the agent may work"), reads the ticket's Runner
+   section, then runs the checks on `main`; a failing `main`
+   stops it. It runs `startapp` for each app the Runner section
+   names.
 3. Tests first: the model may change only the test modules of
-   the apps in `APPS` (`events/`, `accounts/`), plus the empty
-   `__init__.py` files of a new app so its tests are found.
-   The script runs the tests and accepts them only if they fail.
-4. Code: the model may change those apps (not migrations, except
-   an empty `migrations/__init__.py`), `config/settings.py`,
-   `templates/`, `README.md`, and `docs/`, but not the tests.
-   In `config/settings.py` it may only add or remove an
-   `INSTALLED_APPS` entry and set `AUTH_USER_MODEL` (with
-   comments above it); any other settings line fails the checks,
-   so secrets, `DEBUG`, and hosts stay out of reach.
-5. After every edit the script itself runs the checks:
-   allowed paths, the settings guard, at most 65 characters per
-   line, `manage.py check`, and `manage.py test` (every app).
-   `makemigrations --check --dry-run` is recorded only. If a
+   the local apps and of the project package (`config/`), plus
+   the empty `__init__.py` files of a new app so its tests are
+   found. The script runs the tests and accepts them only if
+   they fail for the missing code. When the ticket has the
+   runner make migrations, a test database that cannot be built
+   for lack of them also counts.
+4. Code: the model may change the local apps (not migrations,
+   except an empty `migrations/__init__.py`), the template
+   folders, the settings and URL modules, `README.md`, and
+   `docs/`, but not the tests. In the settings it may change
+   only the settings the Runner section names (see "The ticket's
+   Runner section").
+5. After every edit the script itself runs the checks: allowed
+   paths, the settings guard, at most 65 characters per line,
+   then `makemigrations` if the ticket asks for it,
+   `manage.py check`, and `manage.py test` (every app). If a
    path is refused, a `migrations/__init__.py` is not empty, or
-   the settings guard fails, Django is not run at all.
+   the settings guard fails, Django is not run at all. Last,
+   `makemigrations --check --dry-run`: a model change with no
+   migration fails the checks when the ticket makes migrations
+   or once `main` has migrations, and is only recorded before
+   that (Chapters 15 to 17 write models with no migration on
+   purpose).
 6. A separate model call checks each acceptance criterion
    against the diff and the check output. Unmet criteria go
    back to the code step once.
@@ -41,6 +52,62 @@ the issue number.
    writes its summary.
 9. A summary comment on the PR lists every verdict. A human
    reviews and merges.
+
+## Where the agent may work
+
+Nothing about the project's folders is written into the runner.
+Before the agent changes anything, the runner asks Django, on
+`main`, for:
+
+- the local apps: `INSTALLED_APPS` entries whose folder is in
+  this repository, so `django.contrib` and other installed
+  packages drop out;
+- the template folders: `TEMPLATES` `DIRS`;
+- the settings module and the `ROOT_URLCONF` module; the folder
+  that holds the settings is the project package, whose
+  `tests*.py` files count as tests.
+
+Those are read once. An edit to the settings during the run
+never widens the agent's reach, so a new app comes only from a
+`startapp` line in the ticket. Some places stay closed whatever
+the settings say: `factory/`, any path with a part that starts
+with a dot (`.env`, `.github/`, `.venv/`), `node_modules/`,
+`build/`, and `static/`. `static/` stays closed until the run
+can rebuild `site.css` with `npm run build`.
+
+## The ticket's Runner section
+
+What the runner itself does for a ticket is written in the
+ticket, in a `## Runner` section with one item a line:
+
+```
+## Runner
+
+- startapp accounts
+- makemigrations
+- settings: INSTALLED_APPS, AUTH_USER_MODEL
+```
+
+- `startapp <app>`: the runner creates the app before the
+  tests step, as the book does, and the agent then edits the
+  files it made.
+- `makemigrations [<app> ...] [--name <name>]`: after every
+  code edit the runner removes the migrations it made earlier
+  in the run and runs this command again, so the migrations
+  always match the models. The agent can never write or edit a
+  migration. Generated migrations keep Django's layout, as the
+  book prints them, so the 65-character check skips them.
+- `settings: NAME, NAME`: the settings the agent may change.
+  A changed line must belong to a top-level `NAME = ...` (or
+  the comment lines directly above it), or be a blank line
+  between statements. `SECRET_KEY`, `DEBUG`, and
+  `ALLOWED_HOSTS` can never be named, and imports, docstrings,
+  and the `try` block that reads the secret key are never open.
+
+A ticket without the section gets none of these. Any other line
+stops the run before the first model call, with the line and
+the forms allowed, so the ticket can be fixed and labelled
+again.
 
 ## Reference code
 
@@ -92,8 +159,10 @@ The runner's own tests are not part of the book, so
 python -m unittest factory/test_agent_runner.py
 ```
 
-They cover how edits are applied: every block or none, and a
-clear error for a missing file.
+They cover how edits are applied (every block or none, and a
+clear error for a missing file), the paths built from the
+layout, the Runner section, the settings guard, and the
+migration step.
 
 ## Settings
 
