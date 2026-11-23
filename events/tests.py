@@ -1,21 +1,52 @@
 """Tests for the events app."""
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
 
 from django.contrib.staticfiles import finders
 from django.core.exceptions import ValidationError
-from django.template import Context, Template
 from django.template.loader import render_to_string
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import resolve, reverse
 
 from . import views
 from .models import Event
 
 
-class RoutingTests(SimpleTestCase):
+def save_event(**changes):
+    """Save a published event; keywords replace defaults."""
+    fields = {
+        'title': 'Python meetup',
+        'starts_at': datetime(2026, 11, 19, 18, 30,
+                              tzinfo=UTC),
+        'timezone': 'Europe/London',
+        'location': 'Leeds Central Library',
+        'capacity': 40,
+        'status': Event.Status.PUBLISHED,
+    }
+    fields.update(changes)
+    fields.setdefault(
+        'ends_at', fields['starts_at'] + timedelta(hours=2)
+    )
+    return Event.objects.create(**fields)
+
+
+def layout_pages(event):
+    """List the pages sharing the layout, for one event."""
+    return [
+        ('/', 'events/home.html', 'Otahque'),
+        ('/events/', 'events/list.html',
+         'Events | Otahque'),
+        (f'/events/{event.pk}/', 'events/detail.html',
+         'Python meetup | Otahque'),
+    ]
+
+
+class RoutingTests(TestCase):
     """Each address reaches its view; others are not found."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.event = save_event(title='Django workshop')
 
     def test_home(self):
         response = self.client.get('/')
@@ -27,12 +58,12 @@ class RoutingTests(SimpleTestCase):
 
     def test_event_list(self):
         response = self.client.get('/events/')
-        self.assertContains(response, 'Python meetup')
+        self.assertContains(response, 'Django workshop')
         self.assertTemplateUsed(
             response, 'events/list.html'
         )
         self.assertContains(
-            response, 'href="/events/1/"'
+            response, f'href="/events/{self.event.pk}/"'
         )
         self.assertEqual(
             reverse('events:list'), '/events/'
@@ -46,25 +77,90 @@ class RoutingTests(SimpleTestCase):
         self.assertEqual(response.status_code, 404)
 
 
-class EventDetailTests(SimpleTestCase):
-    """One event by number, and the 404 for any other."""
+class EventListTests(TestCase):
+    """The list shows published events only."""
 
-    def test_sample_event(self):
-        response = self.client.get('/events/1/')
+    @classmethod
+    def setUpTestData(cls):
+        save_event(
+            title='Django workshop',
+            starts_at=datetime(2026, 12, 3, 9,
+                               tzinfo=UTC),
+        )
+        save_event(title='Python meetup')
+        save_event(title='Spring planning',
+                   status=Event.Status.DRAFT)
+        save_event(title='Autumn social',
+                   status=Event.Status.CANCELLED)
+
+    def test_published_events_soonest_first(self):
+        with self.assertNumQueries(1):
+            response = self.client.get('/events/')
+        html = response.content.decode()
+        self.assertLess(html.index('Python meetup'),
+                        html.index('Django workshop'))
+        self.assertNotContains(response, 'Spring planning')
+        self.assertNotContains(response, 'Autumn social')
+
+    def test_empty_list(self):
+        Event.objects.all().delete()
+        response = self.client.get('/events/')
+        self.assertContains(response, 'No events yet.')
+
+
+class EventDetailTests(TestCase):
+    """One published event by number; 404 for any other."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.event = save_event()
+
+    def test_published_event(self):
+        response = self.client.get(
+            f'/events/{self.event.pk}/'
+        )
         self.assertContains(
-            response,
-            '<h1><span class="sample-label">Sample:</span>'
-            ' Python meetup</h1>',
-            html=True,
+            response, '<h1>Python meetup</h1>', html=True
+        )
+        self.assertContains(
+            response, 'Thursday 19 November 2026, 18:30 GMT'
+        )
+        self.assertContains(
+            response, 'Thursday 19 November 2026, 20:30 GMT'
+        )
+        self.assertContains(
+            response, 'Leeds Central Library'
         )
         self.assertTemplateUsed(
             response, 'events/detail.html'
         )
-        self.assertTrue(
-            response['Content-Type'].startswith(
-                'text/html'
-            )
+
+    def test_time_in_event_time_zone(self):
+        event = save_event(
+            starts_at=datetime(2026, 12, 3, 9,
+                               tzinfo=UTC),
+            timezone='Asia/Kolkata',
         )
+        response = self.client.get(f'/events/{event.pk}/')
+        self.assertContains(
+            response, 'Thursday 3 December 2026, 14:30 IST'
+        )
+
+    def test_unpublished_events_are_hidden(self):
+        response = self.client.get(
+            f'/events/{self.event.pk}/'
+        )
+        self.assertContains(
+            response, 'Leeds Central Library'
+        )
+        for status in (Event.Status.DRAFT,
+                       Event.Status.CANCELLED):
+            with self.subTest(status=status):
+                event = save_event(status=status)
+                response = self.client.get(
+                    f'/events/{event.pk}/'
+                )
+                self.assertEqual(response.status_code, 404)
 
     def test_missing_event(self):
         self.assertIs(
@@ -79,24 +175,17 @@ class EventDetailTests(SimpleTestCase):
         self.assertEqual(response.status_code, 404)
 
 
-class TemplateSafetyTests(SimpleTestCase):
+class TemplateSafetyTests(TestCase):
     """Templates escape titles; an empty list says so."""
 
-    def test_empty_list(self):
-        with patch.dict(
-            views.SAMPLE_EVENTS, {}, clear=True
-        ):
-            response = self.client.get('/events/')
-        self.assertContains(
-            response, 'No sample events yet.'
+    @classmethod
+    def setUpTestData(cls):
+        cls.event = save_event(
+            title='<strong>Not a tag</strong>'
         )
 
     def test_list_escapes_title(self):
-        title = '<strong>Not a tag</strong>'
-        with patch.dict(
-            views.SAMPLE_EVENTS, {1: title}, clear=True
-        ):
-            response = self.client.get('/events/')
+        response = self.client.get('/events/')
         self.assertContains(
             response, '&lt;strong&gt;'
         )
@@ -105,11 +194,9 @@ class TemplateSafetyTests(SimpleTestCase):
         )
 
     def test_detail_escapes_title(self):
-        title = '<strong>Not a tag</strong>'
-        with patch.dict(
-            views.SAMPLE_EVENTS, {1: title}, clear=True
-        ):
-            response = self.client.get('/events/1/')
+        response = self.client.get(
+            f'/events/{self.event.pk}/'
+        )
         self.assertContains(
             response, '&lt;strong&gt;'
         )
@@ -118,16 +205,12 @@ class TemplateSafetyTests(SimpleTestCase):
         )
 
 
-class LayoutTests(SimpleTestCase):
+class LayoutTests(TestCase):
     """Every page shares the base layout and navigation."""
 
-    pages = [
-        ('/', 'events/home.html', 'Otahque'),
-        ('/events/', 'events/list.html',
-         'Sample events | Otahque'),
-        ('/events/1/', 'events/detail.html',
-         'Sample event | Otahque'),
-    ]
+    @classmethod
+    def setUpTestData(cls):
+        cls.pages = layout_pages(save_event())
 
     def test_pages_extend_layout(self):
         for url, template, title in self.pages:
@@ -165,44 +248,24 @@ class EventRowPartialTests(SimpleTestCase):
     """The event row partial renders one event."""
 
     def test_row_renders_alone(self):
-        event = {'id': 1, 'title': '<b>Not a tag</b>'}
+        event = Event(pk=7, title='<b>Not a tag</b>')
         html = render_to_string(
             'events/list.html#event-row', {'event': event}
         )
-        self.assertIn('href="/events/1/"', html)
+        self.assertIn('href="/events/7/"', html)
         self.assertIn('&lt;b&gt;Not a tag', html)
         self.assertNotIn('<nav', html)
 
 
-class SampleLabelFilterTests(SimpleTestCase):
-    """The sample_label filter marks and escapes a title."""
-
-    def render_label(self, title):
-        """Render the filter on title, as a template would."""
-        template = Template(
-            '{% load event_labels %}{{ title|sample_label }}'
-        )
-        return template.render(Context({'title': title}))
-
-    def test_labels_title(self):
-        self.assertEqual(
-            self.render_label('Python meetup'),
-            '<span class="sample-label">Sample:</span>'
-            ' Python meetup',
-        )
-
-    def test_escapes_title(self):
-        title = '<strong>Not a tag</strong>'
-        html = self.render_label(title)
-        self.assertIn('&lt;strong&gt;', html)
-        self.assertNotIn('<strong>', html)
-
-
-class StylesheetTests(SimpleTestCase):
+class StylesheetTests(TestCase):
     """Pages link the stylesheet, and Django can find it."""
 
+    @classmethod
+    def setUpTestData(cls):
+        cls.pages = layout_pages(save_event())
+
     def test_pages_link_stylesheet(self):
-        for url, template, title in LayoutTests.pages:
+        for url, template, title in self.pages:
             with self.subTest(url=url):
                 response = self.client.get(url)
                 self.assertContains(

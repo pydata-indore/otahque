@@ -165,53 +165,6 @@
 }
 @layer utilities {
   @layer daisyui.l1.l2.l3 {
-    .filter {
-      display: flex;
-      flex-wrap: wrap;
-    }
-    .filter [type="radio"] {
-      width: auto;
-    }
-    .filter input {
-      overflow: hidden;
-      opacity: 100%;
-      scale: 1;
-      transition: visibility 0.1s allow-discrete, margin 0.1s, opacity 0.3s, padding 0.3s, border-width 0.1s;
-    }
-    .filter input.filter-reset {
-      aspect-ratio: 1 / 1;
-      &::after {
-        --tw-content: "×";
-        content: var(--tw-content);
-      }
-    }
-    .filter > input:not(:last-child) {
-      margin-inline-end: 0.25rem;
-    }
-    .filter > :not(:last-child) input {
-      margin-inline-end: 0.25rem;
-    }
-  }
-  @layer daisyui.l1 {
-    .filter:not(:has(:checked:not(.filter-reset))) :is(.filter-reset, [type="reset"]):not(:focus-visible) {
-      visibility: hidden;
-      margin-inline: 0px;
-      width: 0px;
-      padding-inline: 0px;
-      opacity: 0%;
-      scale: 0;
-      border-width: 0;
-    }
-    .filter:not(:has(:focus-visible)):has(:checked:not(.filter-reset, [type="checkbox"])) :is(input, button):not(:checked, .filter-reset, [type="reset"]) {
-      margin-inline: 0px;
-      width: 0px;
-      padding-inline: 0px;
-      opacity: 0%;
-      scale: 0;
-      border-width: 0;
-    }
-  }
-  @layer daisyui.l1.l2.l3 {
     .navbar {
       display: flex;
       width: 100%;
@@ -345,9 +298,6 @@
   .text-neutral-content {
     color: var(--color-neutral-content);
   }
-  .filter {
-    filter: var(--tw-blur, ) var(--tw-brightness, ) var(--tw-contrast, ) var(--tw-grayscale, ) var(--tw-hue-rotate, ) var(--tw-invert, ) var(--tw-saturate, ) var(--tw-sepia, ) var(--tw-drop-shadow, );
-  }
   @layer daisyui.l1.l2.l3 {
     .aura:has( > .card,  > .alert) {
       --aura-radius: var(--radius-box);
@@ -380,11 +330,6 @@
   }
   .site-nav :focus-visible {
     outline-color: currentColor;
-  }
-  .sample-label {
-    color: #9d480c;
-    font-size: 0.85em;
-    font-weight: 700;
   }
 }
 @layer base {
@@ -554,78 +499,12 @@
   syntax: "*";
   inherits: false;
 }
-@property --tw-blur {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-brightness {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-contrast {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-grayscale {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-hue-rotate {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-invert {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-opacity {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-saturate {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-sepia {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-drop-shadow {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-drop-shadow-color {
-  syntax: "*";
-  inherits: false;
-}
-@property --tw-drop-shadow-alpha {
-  syntax: "<percentage>";
-  inherits: false;
-  initial-value: 100%;
-}
-@property --tw-drop-shadow-size {
-  syntax: "*";
-  inherits: false;
-}
 @layer properties {
   @supports ((-webkit-hyphens: none) and (not (margin-trim: block))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {
     *, ::before, ::after, ::backdrop {
       --tw-space-y-reverse: 0;
       --tw-border-style: solid;
       --tw-font-weight: initial;
-      --tw-blur: initial;
-      --tw-brightness: initial;
-      --tw-contrast: initial;
-      --tw-grayscale: initial;
-      --tw-hue-rotate: initial;
-      --tw-invert: initial;
-      --tw-opacity: initial;
-      --tw-saturate: initial;
-      --tw-sepia: initial;
-      --tw-drop-shadow: initial;
-      --tw-drop-shadow-color: initial;
-      --tw-drop-shadow-alpha: 100%;
-      --tw-drop-shadow-size: initial;
     }
   }
 }
