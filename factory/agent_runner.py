@@ -604,29 +604,44 @@ def long_lines(paths):
     return problems
 
 
+def assigned_name(node):
+    """Return the setting a statement sets to a literal."""
+    target = None
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        target = node.targets[0]
+    elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+        target = node.target
+    if not isinstance(target, ast.Name) or node.value is None:
+        return ''
+    try:
+        ast.literal_eval(node.value)
+    except (ValueError, TypeError, SyntaxError,
+            MemoryError, RecursionError):
+        return ''
+    return target.id
+
+
 def setting_owners(text):
     """Map each line of a settings file to the setting it sets.
 
     A line of a top-level `NAME = ...` (or `NAME += ...`)
     belongs to NAME, and so do the comment lines directly above
-    it. A line of any other statement, such as an import, a
-    docstring or a try block, belongs to ''. So do comments
-    that lead to no statement. Blank lines between statements
-    belong to nothing and are left out. Raise SyntaxError if
-    the file does not parse.
+    it, but only if the value is a plain literal: a call or a
+    walrus in a value could rebind another setting, such as
+    DEBUG. A line of any other statement, such as an import, a
+    docstring or a try block, belongs to ''. So do a line
+    shared by two statements and comments that lead to no
+    statement. Blank lines between statements belong to nothing
+    and are left out. Raise SyntaxError if the file does not
+    parse.
     """
     lines = text.splitlines()
     owners = {}
     for node in ast.parse(text).body:
-        target = None
-        if (isinstance(node, ast.Assign)
-                and len(node.targets) == 1):
-            target = node.targets[0]
-        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
-            target = node.target
-        name = target.id if isinstance(target, ast.Name) else ''
+        name = assigned_name(node)
         for number in range(node.lineno, node.end_lineno + 1):
-            owners[number] = name
+            # One line, two statements: it belongs to neither.
+            owners[number] = '' if number in owners else name
         number = node.lineno - 1
         while number >= 1 and lines[number - 1].startswith('#'):
             owners[number] = name
@@ -694,23 +709,29 @@ def manage(*args):
 GENERATED = []
 # main's commit, which the run's own migrations are new against.
 BASE = 'HEAD'
-# True once main has migrations and none pending: from then on
-# a change that needs a migration fails the checks.
+# True once main has migrations: from then on a change that
+# needs a migration fails the checks.
 MAIN_CLEAN = False
 
 
 def migrations_started():
-    """True if main has migrations and no pending model changes.
+    """True if main has migrations; stop if main lacks one.
 
     Before the first migration (Chapters 15 to 17) models are
     written on purpose without one, so pending changes are only
-    recorded until then.
+    recorded until then. After it, a model change on main with
+    no migration is main's own defect: the run stops rather
+    than relax the check for every ticket.
     """
     code, out = run(['git', 'ls-files'])
     if not any(MIGRATION.fullmatch(p) for p in out.split()):
         return False
     code, out = manage('makemigrations', '--check', '--dry-run')
-    return code == 0
+    if code:
+        raise Blocked('main has migrations, but a model change '
+                      'on main has none:\n'
+                      + fence(tail(out, 15)))
+    return True
 
 
 def run_migrations():

@@ -543,6 +543,25 @@ class SettingsGuardTests(unittest.TestCase):
             '\nDEBUG =', '\n# A note.\n\nDEBUG =')
         self.assertEqual(len(problems), 1)
 
+    def test_two_statements_on_one_line_fail(self):
+        problems = self.change(
+            "]\n\nMIDDLEWARE", "]\n\nDEBUG = True; "
+            "AUTH_USER_MODEL = 'accounts.User'\n\nMIDDLEWARE")
+        self.assertTrue(problems)
+
+    def test_a_walrus_in_a_named_value_fails(self):
+        problems = self.change(
+            "]\n\nMIDDLEWARE", "]\n\nAUTH_USER_MODEL = "
+            "(DEBUG := True) and 'accounts.User'\n\nMIDDLEWARE")
+        self.assertTrue(problems)
+
+    def test_a_call_in_a_named_value_fails(self):
+        problems = self.change(
+            "]\n\nMIDDLEWARE", "]\n\nAUTH_USER_MODEL = "
+            "globals().update(DEBUG=True) or 'a.User'\n\n"
+            "MIDDLEWARE")
+        self.assertTrue(problems)
+
     def test_a_file_that_does_not_parse_fails(self):
         problems = self.change('INSTALLED_APPS = [',
                                'INSTALLED_APPS = [[')
@@ -660,10 +679,11 @@ class MigrationStepTests(unittest.TestCase):
         self.assertTrue(self.started(
             ['events/migrations/0001_initial.py']))
 
-    def test_pending_changes_mean_not_started(self):
+    def test_pending_changes_on_a_migrated_main_stop(self):
         self.pending = 1
-        self.assertFalse(self.started(
-            ['events/migrations/0001_initial.py']))
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'main has migrations'):
+            self.started(['events/migrations/0001_initial.py'])
 
     def test_a_missing_migration_counts_as_red(self):
         out = ('Found 29 test(s).\nValueError: Dependency on '
