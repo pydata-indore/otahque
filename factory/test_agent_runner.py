@@ -217,16 +217,32 @@ class TicketDocsTests(unittest.TestCase):
         docs = agent_runner.ticket_docs({'body': body})
         self.assertEqual(docs, ['docs/design/erd.md'])
 
-    def test_a_huge_doc_is_named_but_not_shown(self):
+    def test_a_long_doc_shows_its_first_whole_lines(self):
         limit = agent_runner.DOC_LIMIT
+        line = 'A line of text.\n'
+        count = limit // len(line) + 50
         big = agent_runner.ROOT / 'docs/design/big.md'
-        big.write_text('x' * (limit + 1))
+        big.write_text('# Start\n' + line * count + '# End\n')
         text = agent_runner.doc_text(['docs/design/big.md',
                                       'docs/design/erd.md'])
-        self.assertIn('--- docs/design/big.md ---', text)
-        self.assertIn('not shown', text)
-        self.assertNotIn('x' * 100, text)
+        shown = text.split('--- docs/design/erd.md ---')[0]
+        self.assertIn('# Start\n', shown)
+        self.assertNotIn('# End', shown)
+        self.assertIn('cut here', shown)
+        self.assertLess(len(shown), limit + 200)
+        # The cut falls between lines, so SEARCH stays whole.
+        self.assertIn(line + '(cut here', shown)
         self.assertIn('# ERD', text)
+
+    def test_an_edit_in_the_shown_part_still_applies(self):
+        limit = agent_runner.DOC_LIMIT
+        big = agent_runner.ROOT / 'docs/design/big.md'
+        big.write_text('# Start\n' + 'x\n' * limit)
+        agent_runner.apply_edits(
+            'FILE: docs/design/big.md\n<<<<<<< SEARCH\n# Start\n'
+            '=======\n# Begin\n>>>>>>> REPLACE\n',
+            lambda path: True)
+        self.assertTrue(big.read_text().startswith('# Begin\n'))
 
 
 class StartappNoteTests(unittest.TestCase):
