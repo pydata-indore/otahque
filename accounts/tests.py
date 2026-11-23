@@ -36,6 +36,8 @@ class UserModelTests(SimpleTestCase):
 
 
 class UserManagerTests(SimpleTestCase):
+    """The manager's refusals, checked before any save."""
+
     def test_create_user_requires_an_email(self):
         with self.assertRaisesMessage(
             ValueError, 'An email address is required.'
