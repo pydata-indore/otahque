@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -481,36 +482,67 @@ def search_problem(path, old, search, count):
         return (f'SEARCH text in {path} matches {count} times; '
                 'add unchanged lines before or after it so it '
                 'matches once.')
-    lines = set(old.splitlines())
+    copy = (f' Copy SEARCH from the current {path} below, not '
+            'from the reference.')
+    have = Counter(old.splitlines())
+    want = Counter(search.splitlines())
     for line in search.splitlines():
-        if line.strip() and line not in lines:
+        if line.strip() and line not in have:
             return (f'SEARCH text in {path} does not match the '
                     'current file. This SEARCH line is not in '
-                    f'it: {line!r}. Copy SEARCH from the '
-                    f'current {path} below, not from the '
-                    'reference.')
+                    f'it: {line!r}.' + copy)
+        if line.strip() and want[line] > have[line]:
+            return (f'SEARCH text in {path} has the line '
+                    f'{line!r} {want[line]} times, but the file '
+                    f'has it {have[line]} times.' + copy)
+    if search.endswith('\n') and search[:-1] in old:
+        return (f'SEARCH text in {path} ends with a line break '
+                'that the file does not have there (its last '
+                'line has none).' + copy)
     return (f'SEARCH text in {path} does not match the current '
             'file: every line is in it, but not in this order, '
-            'or blank lines differ. Copy SEARCH from the '
-            f'current {path} below, not from the reference.')
+            'or blank lines differ.' + copy)
 
 
 def retry_files(reply, allowed):
     """Return the files to show the model after a failed attempt.
 
     The files changed so far, and the existing files the reply
-    tried to edit, so a rejected reply is followed by the real
-    text. Only paths the step allows are shown, so a block
-    naming .env never shows it.
+    named on a FILE: line, even in a block missing a marker, so
+    a rejected reply is followed by the real text. Only plain
+    files the step allows are shown, never a symlink or a path
+    that leads outside the repository, so a block naming .env
+    never shows it.
     """
     paths = list(changed_paths())
-    for edit in EDIT.finditer(reply or ''):
-        path = edit['path']
-        if (path not in paths and allowed(path)
-                and posixpath.normpath(path) == path
-                and (ROOT / path).is_file()):
+    named = re.findall(r'^FILE: *(\S+)', reply or '', re.M)
+    for path in dict.fromkeys(named):
+        if path not in paths and showable(path, allowed):
             paths.append(path)
     return paths
+
+
+def showable(path, allowed):
+    """True if a named file may be shown to the model."""
+    if (not allowed(path) or DENIED.search(path)
+            or posixpath.normpath(path) != path):
+        return False
+    target = ROOT / path
+    if target.is_symlink() or not target.is_file():
+        return False
+    real = target.resolve()
+    return (real.is_relative_to(ROOT.resolve())
+            and not DENIED.search(
+                real.relative_to(ROOT.resolve()).as_posix()))
+
+
+def retry_text(paths):
+    """Return the files for a retry, docs within their limit."""
+    docs = [p for p in paths if DOCS.fullmatch(p)
+            and (ROOT / p).is_file()]
+    code = file_text([p for p in paths if p not in docs])
+    text = doc_text(docs) if docs else ''
+    return '\n\n'.join(part for part in (code, text) if part)
 
 
 def tracked(path):
@@ -1149,7 +1181,7 @@ def edit_loop(messages, allowed, verify, stage):
         messages.append({'role': 'user', 'content': (
             feedback + '\n\nCurrent files you changed or tried '
             'to change (copy SEARCH text only from these):\n\n'
-            + file_text(retry_files(reply, allowed))
+            + retry_text(retry_files(reply, allowed))
             + '\n\nSend corrected edit blocks.')})
     raise Blocked(
         f'{stage}: still failing after {MAX_ATTEMPTS} attempts.')
