@@ -895,6 +895,30 @@ def added_test_names():
     return names
 
 
+def missing_named_tests(body):
+    """Return test methods the ticket names that are not written.
+
+    A ticket that names its tests (`test_...` in backticks) gets
+    them all in the tests step, before any code. This matters
+    most when the red stage is a missing migration: Django then
+    stops before any test runs, so the test run alone cannot
+    show which tests were added (Chapter 18, run 2).
+    """
+    named = set(re.findall(r'`(test_\w+)`', body or ''))
+    if not named or not test_dirs():
+        return []
+    code, out = run(['git', 'ls-files', '--cached', '--others',
+                     '--exclude-standard', '--', *test_dirs()])
+    written = set()
+    for path in out.split():
+        target = ROOT / path
+        if TESTS.fullmatch(path) and target.is_file():
+            written |= set(re.findall(
+                r'^\s*def (test_\w+)',
+                target.read_text(encoding='utf-8'), re.M))
+    return sorted(named - written)
+
+
 def test_count(report):
     found = re.search(r'Ran (\d+) tests?', report)
     return found.group(1) if found else '?'
@@ -1320,6 +1344,13 @@ def main():
             return False, (
                 'Package files must be empty in this step: '
                 + ', '.join(full))
+        missing = missing_named_tests(issue['body'])
+        if missing:
+            return False, (
+                'The ticket names these tests, which are not '
+                'written yet: ' + ', '.join(missing) + '. Write '
+                'every test the ticket asks for in this step; '
+                'the code step cannot change tests.')
         code, out = manage('test')
         if code == 0:
             return False, (

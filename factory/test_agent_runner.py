@@ -740,6 +740,57 @@ class MigrationNoteTests(unittest.TestCase):
         self.assertIn('rule 1', note)
 
 
+class NamedTestsTests(unittest.TestCase):
+    """The tests step writes every test the ticket names."""
+
+    BODY = ('`test_create_user_saves_a_member` and '
+            '`test_every_model_change_has_a_migration`.')
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        agent_runner.ROOT = Path(self.tmp.name)
+        use_layout(self)
+        for folder in ('accounts', 'config'):
+            (agent_runner.ROOT / folder).mkdir()
+        agent_runner.run(['git', 'init', '-q'])
+
+    def write(self, path, *names):
+        text = ''.join(f'    def {n}(self):\n        pass\n'
+                       for n in names)
+        (agent_runner.ROOT / path).write_text(
+            'class T:\n' + text)
+
+    def missing(self):
+        return agent_runner.missing_named_tests(self.BODY)
+
+    def test_a_ticket_without_names_asks_for_nothing(self):
+        self.assertEqual(
+            agent_runner.missing_named_tests('Three tests.'), [])
+
+    def test_a_forgotten_test_file_is_named(self):
+        # Chapter 18, run 2: only config/tests.py was written.
+        self.write('config/tests.py',
+                   'test_every_model_change_has_a_migration')
+        self.assertEqual(self.missing(),
+                         ['test_create_user_saves_a_member'])
+
+    def test_all_named_tests_written_pass(self):
+        self.write('config/tests.py',
+                   'test_every_model_change_has_a_migration')
+        self.write('accounts/tests.py',
+                   'test_create_user_saves_a_member')
+        self.assertEqual(self.missing(), [])
+
+    def test_a_name_outside_a_test_file_does_not_count(self):
+        self.write('accounts/models.py',
+                   'test_create_user_saves_a_member')
+        self.assertIn('test_create_user_saves_a_member',
+                      self.missing())
+
+
 class KeepCommittedTests(unittest.TestCase):
     """Review rounds keep a migration whose time alone is new."""
 
