@@ -1055,6 +1055,18 @@ class GateReadingTests(unittest.TestCase):
         self.assertFalse(agent_runner.has_open_count(body))
         self.assertEqual(agent_runner.read_findings(body), [])
 
+    def test_a_review_with_zero_findings_is_not_open(self):
+        # PR 40's header: every category shows (0).
+        body = ('<h3>Code Review by Qodo</h3>\n\n<code>🐞 Bugs '
+                '(0)</code>  <code>📘 Rule violations (0)</code>'
+                '  <code>📎 Requirement gaps (0)</code>\n')
+        self.assertFalse(agent_runner.has_open_count(body))
+        self.assertEqual(agent_runner.read_findings(body), [])
+
+    def test_a_count_of_ten_is_open(self):
+        body = '<code>🐞 Bugs (10)</code>'
+        self.assertTrue(agent_runner.has_open_count(body))
+
     def test_the_category_count_shows_open_findings(self):
         body = review_comment(badge('High'), finding(1, 'Open'))
         self.assertTrue(agent_runner.has_open_count(body))
