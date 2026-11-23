@@ -37,7 +37,9 @@ the issue number.
    migration fails the checks when the ticket makes migrations
    or once `main` has migrations, and is only recorded before
    that (Chapters 15 to 17 write models with no migration on
-   purpose).
+   purpose). Once `main` has migrations, a model change on
+   `main` itself with no migration stops the run at the
+   baseline.
 6. A separate model call checks each acceptance criterion
    against the diff and the check output. Unmet criteria go
    back to the code step once.
@@ -100,7 +102,11 @@ ticket, in a `## Runner` section with one item a line:
 - `settings: NAME, NAME`: the settings the agent may change.
   A changed line must belong to a top-level `NAME = ...` (or
   the comment lines directly above it), or be a blank line
-  between statements. `SECRET_KEY`, `DEBUG`, and
+  between statements. The value must be a plain literal
+  (strings, lists, numbers and so on): a call or a walrus in a
+  value could quietly set another setting, and so could a
+  second statement on the same line, so those lines belong to
+  no setting. `SECRET_KEY`, `DEBUG`, and
   `ALLOWED_HOSTS` can never be named, and imports, docstrings,
   and the `try` block that reads the secret key are never open.
 
