@@ -58,13 +58,19 @@ erDiagram
 - Capacity is more than 0; an event ends after it
   starts; each status comes from its fixed list
   (CHECK constraints).
+- PR-2: cancelled_at is filled exactly when status is
+  cancelled (CHECK constraint).
+- A cancellation is never earlier than its registration,
+  and a revocation never earlier than its assignment
+  (CHECK constraints).
+- Email addresses are stored in lower case, so two
+  that differ only in letter case are one member
+  (CHECK constraint; decided in Chapter 21).
 - Intent: deleting an event or member that has
   registrations is refused, so history survives.
 
 ## Rules that need more than structure
 
-- PR-2, cancelled_at filled exactly when status is
-  cancelled: a CHECK constraint, Chapter 21.
 - PR-3, never more active places than capacity:
   transactions, Chapter 33.
 - PR-4, own registrations and assigned events only:
@@ -76,8 +82,6 @@ erDiagram
 ## Open questions
 
 - Which contact details, beyond an email address?
-- Are addresses that differ only in letter case one
-  member? Decided in Chapter 21, before sign-up.
 - Who appoints organizers, and must an event have one?
 - When registration opens and closes (Chapter 2 policy).
 - What happens to active registrations when an event

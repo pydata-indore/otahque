@@ -40,9 +40,13 @@ flags, not Otahque's organizer or administrator roles.
 
 ## Open questions
 
-Whether addresses that differ only in letter case are one
-account is decided in Chapter 21, before sign-up. Until
-then, only the domain is lowercased.
+None left from this decision. Letter case was settled in
+Chapter 21, before sign-up: the whole address is stored
+in lower case (the manager and User.clean() lower-case
+it, and a CHECK constraint refuses anything else), so
+two addresses that differ only in letter case are one
+member. Before Chapter 21, only the domain was
+lowercased.
 
 ## Revisit if
 

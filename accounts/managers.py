@@ -7,6 +7,17 @@ class UserManager(BaseUserManager):
 
     use_in_migrations = True
 
+    @classmethod
+    def normalize_email(cls, email):
+        """Store the whole address in lower case."""
+        return super().normalize_email(email).lower()
+
+    def get_by_natural_key(self, email):
+        """Find a member by email, ignoring letter case."""
+        return super().get_by_natural_key(
+            self.normalize_email(email)
+        )
+
     def create_user(self, email, password=None,
                     **extra_fields):
         """Create and save a member with this email."""
