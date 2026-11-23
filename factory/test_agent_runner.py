@@ -740,6 +740,58 @@ class MigrationNoteTests(unittest.TestCase):
         self.assertIn('rule 1', note)
 
 
+class SearchFeedbackTests(unittest.TestCase):
+    """A failed SEARCH says why, and the retry shows the file."""
+
+    OLD = ('"""Tests for the accounts app."""\n\n'
+           'from django.test import SimpleTestCase\n\n'
+           'x = 1\nx = 1\n')
+
+    def problem(self, search):
+        return agent_runner.search_problem(
+            'accounts/tests.py', self.OLD, search,
+            self.OLD.count(search))
+
+    def test_the_first_missing_line_is_named(self):
+        # The book's listing has no module docstring here.
+        message = self.problem(
+            'from django.test import TestCase\n')
+        self.assertIn("'from django.test import TestCase'",
+                      message)
+        self.assertIn('not from the reference', message)
+
+    def test_a_repeated_match_asks_for_context(self):
+        self.assertIn('matches 2 times', self.problem('x = 1\n'))
+
+    def test_lines_in_another_order_are_explained(self):
+        message = self.problem(
+            'from django.test import SimpleTestCase\n'
+            '"""Tests for the accounts app."""\n')
+        self.assertIn('not in this order', message)
+
+    def test_the_retry_shows_the_files_the_reply_named(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        self.addCleanup(setattr, agent_runner, 'changed_paths',
+                        agent_runner.changed_paths)
+        agent_runner.ROOT = Path(self.tmp.name)
+        agent_runner.changed_paths = lambda: []
+        use_layout(self)
+        (agent_runner.ROOT / 'accounts').mkdir()
+        (agent_runner.ROOT / 'accounts/tests.py').write_text(
+            self.OLD)
+        (agent_runner.ROOT / '.env').write_text('SECRET=1\n')
+        reply = (block('accounts/tests.py', 'nope\n', 'y\n')
+                 + block('.env', 'SECRET=1\n', 'x\n')
+                 + block('docs/../.env', 'S\n', 'x\n')
+                 + block('config/missing.py', '', 'x\n'))
+        paths = agent_runner.retry_files(
+            reply, agent_runner.tests_step_path)
+        self.assertEqual(paths, ['accounts/tests.py'])
+
+
 class NamedTestsTests(unittest.TestCase):
     """The tests step writes every test the ticket names."""
 
