@@ -1,3 +1,4 @@
+"""Tests for the accounts app."""
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
@@ -6,6 +7,8 @@ from .models import User
 
 
 class UserModelTests(SimpleTestCase):
+    """The User model's rules, checked without a database."""
+
     def test_user_model_is_accounts_user(self):
         self.assertIs(get_user_model(), User)
         self.assertEqual(User.USERNAME_FIELD, 'email')
