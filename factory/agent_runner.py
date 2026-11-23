@@ -913,10 +913,39 @@ def missing_named_tests(body):
     for path in out.split():
         target = ROOT / path
         if TESTS.fullmatch(path) and target.is_file():
-            written |= set(re.findall(
-                r'^\s*def (test_\w+)',
-                target.read_text(encoding='utf-8'), re.M))
+            written |= test_methods(
+                target.read_text(encoding='utf-8'))
     return sorted(named - written)
+
+
+def test_methods(text):
+    """Return the test methods Django's runner would find.
+
+    Only methods (async ones too) of a class based on a
+    ...TestCase count, directly or through a class in the same
+    module. A name in a helper class or a string does not run,
+    so it does not count. A module that does not parse has
+    none.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return set()
+    cases, names = set(), set()
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = {b.attr if isinstance(b, ast.Attribute)
+                 else getattr(b, 'id', '') for b in node.bases}
+        if any(b.endswith('TestCase') or b in cases
+               for b in bases):
+            cases.add(node.name)
+            names |= {
+                item.name for item in node.body
+                if isinstance(item, (ast.FunctionDef,
+                                     ast.AsyncFunctionDef))
+                and item.name.startswith('test')}
+    return names
 
 
 def test_count(report):

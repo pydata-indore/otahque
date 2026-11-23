@@ -757,11 +757,10 @@ class NamedTestsTests(unittest.TestCase):
             (agent_runner.ROOT / folder).mkdir()
         agent_runner.run(['git', 'init', '-q'])
 
-    def write(self, path, *names):
+    def write(self, path, *names, head='class T(TestCase):\n'):
         text = ''.join(f'    def {n}(self):\n        pass\n'
                        for n in names)
-        (agent_runner.ROOT / path).write_text(
-            'class T:\n' + text)
+        (agent_runner.ROOT / path).write_text(head + text)
 
     def missing(self):
         return agent_runner.missing_named_tests(self.BODY)
@@ -782,6 +781,43 @@ class NamedTestsTests(unittest.TestCase):
                    'test_every_model_change_has_a_migration')
         self.write('accounts/tests.py',
                    'test_create_user_saves_a_member')
+        self.assertEqual(self.missing(), [])
+
+    def test_an_async_test_counts(self):
+        (agent_runner.ROOT / 'accounts/tests.py').write_text(
+            'class T(TestCase):\n'
+            '    async def test_create_user_saves_a_member('
+            'self):\n        pass\n')
+        self.write('config/tests.py',
+                   'test_every_model_change_has_a_migration')
+        self.assertEqual(self.missing(), [])
+
+    def test_a_helper_class_does_not_count(self):
+        self.write('config/tests.py',
+                   'test_every_model_change_has_a_migration')
+        self.write('accounts/tests.py',
+                   'test_create_user_saves_a_member',
+                   head='class Helper:\n')
+        self.assertEqual(self.missing(),
+                         ['test_create_user_saves_a_member'])
+
+    def test_a_name_in_a_string_does_not_count(self):
+        self.write('config/tests.py',
+                   'test_every_model_change_has_a_migration')
+        (agent_runner.ROOT / 'accounts/tests.py').write_text(
+            'NOTE = """\n'
+            '    def test_create_user_saves_a_member(self):\n'
+            '"""\n')
+        self.assertEqual(self.missing(),
+                         ['test_create_user_saves_a_member'])
+
+    def test_a_subclass_of_a_local_test_case_counts(self):
+        self.write('config/tests.py',
+                   'test_every_model_change_has_a_migration')
+        self.write('accounts/tests.py',
+                   'test_create_user_saves_a_member',
+                   head='class Base(django.test.TestCase):\n'
+                        '    pass\n\n\nclass T(Base):\n')
         self.assertEqual(self.missing(), [])
 
     def test_a_name_outside_a_test_file_does_not_count(self):
