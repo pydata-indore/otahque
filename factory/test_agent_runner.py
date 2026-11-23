@@ -17,6 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agent_runner  # noqa: E402
 
+# The real lookup, kept before any test replaces it.
+HEAD_COMMIT = agent_runner.head_commit
+
 # The layout project_layout() reads from this project's settings.
 LAYOUT = {'apps': ['accounts', 'events'],
           'templates': ['templates'],
@@ -1077,12 +1080,13 @@ class GateLoopTests(unittest.TestCase):
 
     def setUp(self):
         self.posted, self.fixed = [], []
-        self.reviews = []
+        self.reviewed = self.HEAD
         fake = {
+            # The wait's own snapshot says nothing is open; the
+            # loop must use the fresh read from review_state().
             'wait_for_review': lambda pr, since:
-                self.reviews.pop(0)[:2] + (self.HEAD,),
-            'open_findings': lambda pr, cid:
-                self.findings.pop(0),
+                (1, False, self.HEAD),
+            'review_state': self.next_state,
             'head_commit': lambda pr=None: self.HEAD,
             'finding_files': lambda findings: '',
             'review_text': lambda pr, cid: 'review',
@@ -1107,9 +1111,13 @@ class GateLoopTests(unittest.TestCase):
         agent_runner.GENERATED = []
         use_layout(self)
 
+    def next_state(self, comment_id):
+        """Stand in for review_state(): one fresh read."""
+        found = self.findings.pop(0)
+        return found, self.reviewed, bool(found)
+
     def run_loop(self, findings, verdicts):
         self.findings = findings
-        self.reviews = [(1, bool(f)) for f in findings]
         replies = list(verdicts)
         agent_runner.ask_json = lambda messages: {
             'findings': replies.pop(0)}
@@ -1166,6 +1174,39 @@ class GateLoopTests(unittest.TestCase):
             self.run_loop([[odd]],
                           [[{'n': 1, 'verdict': 'disputed',
                              'reason': 'r'}]])
+
+    def test_a_finding_added_while_waiting_is_seen(self):
+        # The wait saw nothing open; the fresh read has a High.
+        with self.assertRaises(agent_runner.Blocked):
+            self.run_loop([[self.finding('High')]],
+                          [[{'n': 1, 'verdict': 'disputed',
+                             'reason': 'r'}]])
+        self.assertIn('a human decides', self.posted[-1])
+
+    def test_an_unknown_pr_head_never_meets_the_gate(self):
+        agent_runner.head_commit = lambda pr: None
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'does not cover'):
+            self.run_loop([[]], [])
+        self.assertNotIn('**Gate met.**', self.posted[-1])
+        self.assertIn('PR head `unknown`', self.posted[-1])
+
+    def test_a_review_of_an_older_commit_fails(self):
+        self.reviewed = 'c' * 40
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'does not cover'):
+            self.run_loop([[]], [])
+
+    def test_a_failed_head_lookup_gives_no_head(self):
+        def broken(*args, **kwargs):
+            raise RuntimeError('gh pr: network')
+        self.addCleanup(setattr, agent_runner, 'gh',
+                        agent_runner.gh)
+        self.addCleanup(setattr, agent_runner, 'head_commit',
+                        agent_runner.head_commit)
+        agent_runner.gh = broken
+        agent_runner.head_commit = HEAD_COMMIT
+        self.assertIsNone(agent_runner.head_commit(35))
 
     def test_a_stale_review_ends_with_a_pr_report(self):
         def stale(pr, since):

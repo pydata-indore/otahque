@@ -1627,10 +1627,16 @@ def read_findings(body):
     return findings
 
 
-def open_findings(pr, comment_id):
-    """Return the open findings of Qodo's review on the PR."""
-    main = gh_json(f'repos/{REPO}/issues/comments/{comment_id}')
-    return read_findings(main['body'])
+def review_state(comment_id):
+    """Return (open findings, reviewed commit, has open count).
+
+    All three come from one fresh read of Qodo's comment, taken
+    after the wait settles, so an edit made meanwhile is seen.
+    """
+    body = gh_json(
+        f'repos/{REPO}/issues/comments/{comment_id}')['body']
+    return (read_findings(body), reviewed_commit(body),
+            bool(re.search(r'\(\d+\)', body)))
 
 
 def finding_files(findings):
@@ -1652,21 +1658,20 @@ def reviewed_commit(body):
     return found[1] if found else None
 
 
-def head_commit(pr=None):
-    """Return the PR's head commit on GitHub, else local HEAD.
+def head_commit(pr):
+    """Return the PR's head commit on GitHub, or None.
 
     The PR head is what must be reviewed: someone else may have
-    pushed to the branch after the runner did.
+    pushed to the branch after the runner did. The local HEAD is
+    never a stand-in, so an unknown head can never meet the
+    gate.
     """
-    if pr is not None:
-        try:
-            return gh('pr', 'view', str(pr), '-R', REPO,
-                      '--json', 'headRefOid', '-q',
-                      '.headRefOid').strip()
-        except RuntimeError:
-            pass
-    code, out = run(['git', 'rev-parse', 'HEAD'])
-    return out.strip()
+    try:
+        head = gh('pr', 'view', str(pr), '-R', REPO, '--json',
+                  'headRefOid', '-q', '.headRefOid').strip()
+    except RuntimeError:
+        return None
+    return head if re.fullmatch(r'[0-9a-f]{40}', head) else None
 
 
 class StaleReview(Exception):
@@ -1704,7 +1709,7 @@ def gate_report(rows, low, gate_met, reason, reviewed, head):
     covered = (reviewed and head and reviewed == head)
     lines += ['', f'Latest Qodo review covers '
               f'`{(reviewed or "unknown")[:7]}`; PR head '
-              f'`{head[:7]}`'
+              f'`{(head or "unknown")[:7]}`'
               + ('.' if covered else ': NOT the same commit.'),
               'Checks: passed on the last commit '
               '(`manage.py check`, `test`, `makemigrations '
@@ -1761,15 +1766,19 @@ def review(pr, branch, issue, messages, since):
     for round_ in range(1, REVIEW_ROUNDS + 2):
         log(f'### 5.{round_} Qodo review')
         try:
-            comment_id, has_open, reviewed = wait_for_review(
-                pr, since)
+            comment_id = wait_for_review(pr, since)[0]
         except StaleReview as stale:
             return finish(pr, rows, low, False, (
                 'Qodo\'s latest review does not cover the PR '
                 'head commit.'), stale.reviewed, stale.head)
+        # One fresh read after the wait settled: findings, the
+        # open count, and the reviewed commit all come from it.
+        found, reviewed, has_open = review_state(comment_id)
         head = head_commit(pr)
-        found = (open_findings(pr, comment_id) if has_open
-                 else [])
+        if reviewed != head:
+            return finish(pr, rows, low, False, (
+                'Qodo\'s latest review does not cover the PR '
+                'head commit.'), reviewed, head)
         gate = [f for f in found if f['severity'] != 'Low']
         low = [f for f in found if f['severity'] == 'Low']
         for f in found:
@@ -1936,7 +1945,7 @@ def finish(pr, rows, low, gate_met, reason, reviewed, head):
     The gate is only met when the latest review covers the PR
     head, so a stale review can never pass it.
     """
-    if gate_met and reviewed != head:
+    if gate_met and (not head or reviewed != head):
         gate_met = False
         reason = ('The latest Qodo review does not cover the PR '
                   'head commit, so the gate cannot be checked.')
