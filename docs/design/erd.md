@@ -91,3 +91,12 @@ erDiagram
 - Attendance, check-in, and waitlists: Chapter 46.
 - Communities and tenancy: Chapters 67 and 68.
 - Audit records: Chapter 65.
+
+## Django implementation mapping (proposed)
+
+The Member entity is implemented by the Django model
+accounts.User, named by AUTH_USER_MODEL. Django's own
+fields (password hash, last sign-in, active and staff
+flags, permissions) serve the framework; they add no
+product requirement to Member. See
+docs/adr/ADR-002-user-model.md.
