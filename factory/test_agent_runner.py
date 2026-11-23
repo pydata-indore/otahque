@@ -1046,6 +1046,19 @@ class GateReadingTests(unittest.TestCase):
         self.assertEqual([f['title'] for f in found],
                          ['Open one'])
 
+    def test_a_number_in_a_resolved_title_is_not_open(self):
+        body = review_comment(resolved=(
+            badge('Medium')
+            + finding(1, '<s>Handle (2) cases</s> <code>✓ '
+                         'Resolved</code>')))
+        body = body.replace('<code>🐞 Bugs (2)</code>', '')
+        self.assertFalse(agent_runner.has_open_count(body))
+        self.assertEqual(agent_runner.read_findings(body), [])
+
+    def test_the_category_count_shows_open_findings(self):
+        body = review_comment(badge('High'), finding(1, 'Open'))
+        self.assertTrue(agent_runner.has_open_count(body))
+
     def test_a_struck_title_outside_the_section_is_skipped(self):
         body = review_comment(badge('High'),
                               finding(1, '<s>Fixed</s>'))
