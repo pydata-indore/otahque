@@ -1337,8 +1337,8 @@ def wait_for_review(pr, since):
             if 'Code Review by Qodo' not in body:
                 continue
             reviewed = reviewed_commit(body)
-            if reviewed and reviewed != head_commit():
-                stale = True
+            if reviewed and reviewed != head_commit(pr):
+                stale = reviewed
                 continue
             has_open = bool(re.search(r'\(\d+\)', body))
             if has_open or 'Resolved' in body:
@@ -1346,10 +1346,8 @@ def wait_for_review(pr, since):
                 return item['id'], has_open, reviewed
     out_of_time()
     if stale:
-        raise Blocked(
-            f'Quality gate not met: Qodo\'s latest review on PR '
-            f'#{pr} does not cover the head commit after '
-            f'{QODO_WAIT // 60} minutes.')
+        # review() turns this into a gate report on the PR.
+        raise StaleReview(stale, head_commit(pr))
     if heard:
         raise Blocked(
             f'Qodo commented on PR #{pr} but posted no review '
@@ -1574,45 +1572,78 @@ def main():
 # Findings at these severities must be fixed, or disputed with
 # evidence for a human to decide, before the task is done.
 GATE = ('High', 'Medium')
+# A severity badge, or a "View medium (3)" fold, starts a group;
+# the findings after it have that severity.
 SEVERITY = re.compile(
-    r'img\.shields\.io/badge/(High|Medium|Low)-')
-KIND = re.compile(
-    r'<code>[^<]*?(Bug|Rule violation|Requirement gap)[^<]*'
-    r'</code>')
-TITLE = re.compile(r'^\s*\d+\\?\.\s+(.+?)\s*<code>', re.M)
+    r'img\.shields\.io/badge/(High|Medium|Low)-'
+    r'|<strong>View (high|medium|low) \(\d+\)', re.I)
+FINDING = re.compile(
+    r'<summary>\s*\d+\.\s+(?P<title>.+?)\s*'
+    r'<code>[^<]*?(?P<type>Bug|Rule violation|Requirement gap)'
+    r'[^<]*</code>')
+WHERE = re.compile(r'<code>\[([\w./-]+)\[R?(\d+)')
 REVIEWED = re.compile(
     r'<!-- https://github\.com/\S+/commit/([0-9a-f]{40}) -->')
+# Shown to the review triage at most, all named files together.
+FILES_LIMIT = 30000
 
 
-def read_finding(comment_):
-    """Return one open Qodo inline finding as a dict.
+def read_findings(body):
+    """Return the open findings in Qodo's review comment.
 
-    Qodo starts each finding with a severity badge (High,
-    Medium or Low) and tags its type (Bug, Rule violation,
-    Requirement gap). A badge the runner cannot read gives the
-    severity '?', which the gate treats as blocking.
+    Each finding sits under the last severity badge (High,
+    Medium or Low) above it and carries its type (Bug, Rule
+    violation, Requirement gap) and a code link. Resolved
+    findings are struck through and skipped. A finding with no
+    severity above it gets '?', which the gate treats as High.
     """
-    body = comment_['body']
-    severity = SEVERITY.search(body)
-    kind = KIND.search(body)
-    title = TITLE.search(body)
-    return {
-        'id': comment_['id'],
-        'title': (html.unescape(title[1]) if title
-                  else plain(body).strip().split('\n')[0])[:120],
-        'severity': severity[1] if severity else '?',
-        'type': kind[1] if kind else '?',
-        'where': (f'{comment_.get("path")}:'
-                  f'{comment_.get("line")}'),
-    }
+    body = (body or '').split('<strong>Resolved findings')[0]
+    events = sorted(
+        [(m.start(), 'severity', m) for m in
+         SEVERITY.finditer(body)]
+        + [(m.start(), 'finding', m) for m in
+           FINDING.finditer(body)], key=lambda e: e[0])
+    findings, severity = [], '?'
+    for n, (start, kind, match) in enumerate(events):
+        if kind == 'severity':
+            severity = (match[1] or match[2]).capitalize()
+            continue
+        title = match['title']
+        if '<s>' in title:
+            continue
+        nxt = next((e[0] for e in events[n + 1:]
+                    if e[1] == 'finding'), len(body))
+        where = WHERE.search(body, match.end(), nxt)
+        findings.append({
+            'id': len(findings) + 1,
+            'title': html.unescape(
+                re.sub(r'<[^>]+>', '', title)).strip()[:120],
+            'severity': severity,
+            'type': match['type'],
+            'path': where[1] if where else '',
+            'where': (f'{where[1]}:{where[2]}' if where
+                      else 'no location'),
+        })
+    return findings
 
 
-def open_findings(pr):
-    """Return Qodo's open inline findings on the PR."""
-    return [read_finding(c) for c in
-            gh_json(f'repos/{REPO}/pulls/{pr}/comments')
-            if is_qodo(c) and '<s>' not in c['body']
-            and SEVERITY.search(c['body'])]
+def open_findings(pr, comment_id):
+    """Return the open findings of Qodo's review on the PR."""
+    main = gh_json(f'repos/{REPO}/issues/comments/{comment_id}')
+    return read_findings(main['body'])
+
+
+def finding_files(findings):
+    """Return the current text of the files the findings name.
+
+    The model cannot open files, so a finding about code outside
+    the diff needs that file in the triage. Dot-files, links,
+    and denied paths are never shown, and the total is capped.
+    """
+    paths = list(dict.fromkeys(
+        f['path'] for f in findings if f.get('path')))
+    shown = [p for p in paths if showable(p, lambda path: True)]
+    return retry_text(shown)[:FILES_LIMIT]
 
 
 def reviewed_commit(body):
@@ -1621,9 +1652,29 @@ def reviewed_commit(body):
     return found[1] if found else None
 
 
-def head_commit():
+def head_commit(pr=None):
+    """Return the PR's head commit on GitHub, else local HEAD.
+
+    The PR head is what must be reviewed: someone else may have
+    pushed to the branch after the runner did.
+    """
+    if pr is not None:
+        try:
+            return gh('pr', 'view', str(pr), '-R', REPO,
+                      '--json', 'headRefOid', '-q',
+                      '.headRefOid').strip()
+        except RuntimeError:
+            pass
     code, out = run(['git', 'rev-parse', 'HEAD'])
     return out.strip()
+
+
+class StaleReview(Exception):
+    """Qodo's latest review covers an older commit."""
+
+    def __init__(self, reviewed, head):
+        super().__init__(reviewed)
+        self.reviewed, self.head = reviewed, head
 
 
 def gate_report(rows, low, gate_met, reason, reviewed, head):
@@ -1679,14 +1730,15 @@ def triage(issue, gate, findings):
             '\n\n# Findings to judge (High and Medium only)\n'
             f'{listed}\n\nText between ~~ marks is already '
             'resolved. Investigate each numbered finding '
-            'against the code and the ticket, including files '
-            'outside the diff that a finding names. '
+            'against the code and the ticket, including the '
+            'current files the findings name, shown below. '
             + generated_note()
             + 'Confirm it if it is valid; dispute it only with '
             'evidence from the code, the ticket or AGENTS.md. '
             'Return JSON: {"findings": [{"n": 1, "verdict": '
             '"confirmed" or "disputed", "reason": '
-            '"evidence"}]}')},
+            '"evidence"}]}\n\n# Files the findings name\n'
+            + (finding_files(gate) or 'None.'))},
     ])
     verdicts = {}
     for item in answer.get('findings', []):
@@ -1708,10 +1760,16 @@ def review(pr, branch, issue, messages, since):
     rows, low = [], []
     for round_ in range(1, REVIEW_ROUNDS + 2):
         log(f'### 5.{round_} Qodo review')
-        comment_id, has_open, reviewed = wait_for_review(
-            pr, since)
-        head = head_commit()
-        found = open_findings(pr) if has_open else []
+        try:
+            comment_id, has_open, reviewed = wait_for_review(
+                pr, since)
+        except StaleReview as stale:
+            return finish(pr, rows, low, False, (
+                'Qodo\'s latest review does not cover the PR '
+                'head commit.'), stale.reviewed, stale.head)
+        head = head_commit(pr)
+        found = (open_findings(pr, comment_id) if has_open
+                 else [])
         gate = [f for f in found if f['severity'] != 'Low']
         low = [f for f in found if f['severity'] == 'Low']
         for f in found:
@@ -1762,7 +1820,7 @@ def review(pr, branch, issue, messages, since):
     finish(pr, rows, low, False, (
         f'High or Medium findings remain after {REVIEW_ROUNDS} '
         'fix rounds, so the loop stopped.'), reviewed,
-        head_commit())
+        head_commit(pr))
 
 
 def ticket_criteria(body):
@@ -1818,8 +1876,9 @@ def generated_note():
         'are kept exactly as Django writes them: '
         + ', '.join(GENERATED) + '. AGENTS.md rule 1 exempts '
         'them from the 65-character limit, and the agent can '
-        'never edit them. Dismiss a finding that asks to '
-        'reformat or hand-edit them, naming that rule; a '
+        'never edit them. Dispute (never confirm) a finding '
+        'that asks to reformat or hand-edit them, naming that '
+        'rule; a '
         'finding about what they create is about the models. ')
 
 

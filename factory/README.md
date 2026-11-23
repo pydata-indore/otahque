@@ -48,15 +48,16 @@ the issue number.
 7. One commit, a pushed branch, and a PR that closes the issue,
    with the failing-test output, the criteria table, and the
    checks.
-8. It waits for Qodo's review of the head commit (the review
-   comment names the commit it covers) and applies the quality
-   gate in `AGENTS.md`. It reads each open finding's severity
-   badge and type. The model judges each High or Medium finding
-   as confirmed or disputed, with evidence; confirmed ones are
-   fixed in a new commit, the checks run, and it posts
-   `/agentic_review` for the next round. Low findings are never
-   changed. A finding whose severity it cannot read counts as
-   High.
+8. It waits for Qodo's review of the PR's head commit on GitHub
+   (the review comment names the commit it covers) and applies
+   the quality gate in `AGENTS.md`. It reads every open finding
+   from the review comment: its severity group, type, and file.
+   The model judges each High or Medium finding as confirmed or
+   disputed, with evidence, and sees the current text of the
+   files the findings name. Confirmed ones are fixed in a new
+   commit, the checks run, and it posts `/agentic_review` for
+   the next round. Low findings are never changed. A finding
+   whose severity it cannot read counts as High.
 9. The run ends with a gate report on the PR: every High or
    Medium finding with its type, severity and verdict, the Low
    findings flagged for a human, and the reviewed commit against

@@ -968,67 +968,106 @@ class NamedTestsTests(unittest.TestCase):
                       self.missing())
 
 
-def qodo_comment(severity, kind, title, struck=False, cid=1):
-    """Return an inline comment shaped like Qodo's on a PR."""
-    body = (f'<img src="https://img.shields.io/badge/{severity}-'
-            '634FD1?style=flat-square" alt="x">\n\n'
-            f'1\\. {title} <code>{kind}</code> '
-            '<code>⛨ Security</code>\n\n<pre>Details.</pre>')
-    if struck:
-        body = '<s>' + body + '</s>'
-    return {'id': cid,
-            'user': {'login': 'qodo-code-review[bot]'},
-            'body': body, 'path': 'events/views.py', 'line': 14}
+def badge(severity):
+    """Return a Qodo severity badge line."""
+    return (f'<img src="https://img.shields.io/badge/{severity}-'
+            '634FD1?style=flat-square" alt="x">\n')
+
+
+def finding(n, title, kind='🐞 Bug', path='events/views.py',
+            line=14):
+    """Return one finding as Qodo's review comment lists it."""
+    return (f'<details>\n<summary>  {n}.  {title} <code>{kind}'
+            f'</code></summary>\n><summary>Code</summary>\n'
+            f'><code>[{path}[R{line}-{line + 1}]](https://x/'
+            f'pull/1/files#diff-abc)</code>\n</details>\n')
+
+
+def review_comment(*parts, resolved=''):
+    """Return a review comment shaped like Qodo's."""
+    return ('<h3>Code Review by Qodo</h3>\n<code>🐞 Bugs (2)'
+            '</code>\n' + ''.join(parts)
+            + ('<details><summary><strong>Resolved findings'
+               '</strong></summary>\n' + resolved if resolved
+               else '')
+            + '<!-- https://github.com/o/r/commit/'
+            + 'a' * 40 + ' -->\n')
 
 
 class GateReadingTests(unittest.TestCase):
     """The gate reads each finding's severity and type."""
 
-    def test_severity_type_and_title_are_read(self):
-        f = agent_runner.read_finding(qodo_comment(
-            'High', '🐞 Bug', 'Retry prompts can expose files'))
+    def test_each_finding_takes_its_groups_severity(self):
+        body = review_comment(
+            badge('High'), finding(1, 'Gate passes wrongly'),
+            badge('Medium'), finding(2, 'Wrong advice'),
+            '<details><summary><ins><strong>View medium (1)'
+            '</strong></ins></summary>\n',
+            finding(3, 'No PR report', line=1348))
+        found = agent_runner.read_findings(body)
         self.assertEqual(
-            (f['severity'], f['type'], f['title'], f['where']),
-            ('High', 'Bug', 'Retry prompts can expose files',
-             'events/views.py:14'))
+            [(f['title'], f['severity']) for f in found],
+            [('Gate passes wrongly', 'High'),
+             ('Wrong advice', 'Medium'),
+             ('No PR report', 'Medium')])
+        self.assertEqual(found[2]['where'],
+                         'events/views.py:1348')
+        self.assertEqual(found[2]['path'], 'events/views.py')
 
     def test_rule_violations_and_requirement_gaps(self):
-        rule = agent_runner.read_finding(qodo_comment(
-            'Low', '📘 Rule violation', 'A long line'))
-        gap = agent_runner.read_finding(qodo_comment(
-            'Medium', '📎 Requirement gap', 'Missing test'))
-        self.assertEqual((rule['severity'], rule['type']),
-                         ('Low', 'Rule violation'))
-        self.assertEqual((gap['severity'], gap['type']),
-                         ('Medium', 'Requirement gap'))
-
-    def test_an_unreadable_badge_blocks_as_unknown(self):
-        comment_ = qodo_comment('High', '🐞 Bug', 'T')
-        comment_['body'] = comment_['body'].replace(
-            'badge/High', 'badge/Severe')
+        body = review_comment(
+            badge('Low'),
+            finding(1, 'A long line', '📘 Rule violation'),
+            badge('Medium'),
+            finding(2, 'Missing test', '📎 Requirement gap'))
+        found = agent_runner.read_findings(body)
         self.assertEqual(
-            agent_runner.read_finding(comment_)['severity'], '?')
+            [(f['type'], f['severity']) for f in found],
+            [('Rule violation', 'Low'),
+             ('Requirement gap', 'Medium')])
 
-    def test_resolved_and_other_comments_are_not_open(self):
-        comments = [
-            qodo_comment('High', '🐞 Bug', 'Open one', cid=1),
-            qodo_comment('High', '🐞 Bug', 'Done', True, cid=2),
-            {'id': 3, 'user': {'login': 'someone'},
-             'body': qodo_comment('High', '🐞 Bug', 'x')['body'],
-             'path': 'a.py', 'line': 1},
-        ]
-        self.addCleanup(setattr, agent_runner, 'gh_json',
-                        agent_runner.gh_json)
-        agent_runner.gh_json = lambda path: comments
-        found = agent_runner.open_findings(35)
-        self.assertEqual([f['id'] for f in found], [1])
+    def test_a_finding_before_any_badge_is_unknown(self):
+        body = review_comment(finding(1, 'Odd'), badge('Low'),
+                              finding(2, 'Fine'))
+        found = agent_runner.read_findings(body)
+        self.assertEqual([f['severity'] for f in found],
+                         ['?', 'Low'])
+
+    def test_resolved_findings_are_not_open(self):
+        body = review_comment(
+            badge('Medium'), finding(1, 'Open one'),
+            resolved=(badge('Medium')
+                      + finding(2, '<s>Done</s> <code>✓ Resolved'
+                                   '</code>')))
+        found = agent_runner.read_findings(body)
+        self.assertEqual([f['title'] for f in found],
+                         ['Open one'])
+
+    def test_a_struck_title_outside_the_section_is_skipped(self):
+        body = review_comment(badge('High'),
+                              finding(1, '<s>Fixed</s>'))
+        self.assertEqual(agent_runner.read_findings(body), [])
 
     def test_the_reviewed_commit_is_read_from_the_footer(self):
-        sha = 'a' * 40
-        body = (f'<!-- https://github.com/o/r/commit/{sha} -->\n'
-                '<a href="https://www.qodo.ai">Qodo</a>')
-        self.assertEqual(agent_runner.reviewed_commit(body), sha)
+        body = review_comment(badge('Low'), finding(1, 'x'))
+        self.assertEqual(agent_runner.reviewed_commit(body),
+                         'a' * 40)
         self.assertIsNone(agent_runner.reviewed_commit('none'))
+
+    def test_named_files_are_shown_but_never_dot_files(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        agent_runner.ROOT = Path(self.tmp.name)
+        use_layout(self)
+        (agent_runner.ROOT / 'AGENTS.md').write_text('Rules\n')
+        (agent_runner.ROOT / '.env').write_text('SECRET=1\n')
+        text = agent_runner.finding_files([
+            {'path': 'AGENTS.md'}, {'path': '.env'},
+            {'path': 'missing.py'}, {'path': ''}])
+        self.assertIn('--- AGENTS.md ---', text)
+        self.assertNotIn('SECRET', text)
 
 
 class GateLoopTests(unittest.TestCase):
@@ -1042,8 +1081,10 @@ class GateLoopTests(unittest.TestCase):
         fake = {
             'wait_for_review': lambda pr, since:
                 self.reviews.pop(0)[:2] + (self.HEAD,),
-            'open_findings': lambda pr: self.findings.pop(0),
-            'head_commit': lambda: self.HEAD,
+            'open_findings': lambda pr, cid:
+                self.findings.pop(0),
+            'head_commit': lambda pr=None: self.HEAD,
+            'finding_files': lambda findings: '',
             'review_text': lambda pr, cid: 'review',
             'diff_from_main': lambda: 'diff',
             'comment': lambda kind, n, text:
@@ -1125,6 +1166,29 @@ class GateLoopTests(unittest.TestCase):
             self.run_loop([[odd]],
                           [[{'n': 1, 'verdict': 'disputed',
                              'reason': 'r'}]])
+
+    def test_a_stale_review_ends_with_a_pr_report(self):
+        def stale(pr, since):
+            raise agent_runner.StaleReview('a' * 40, self.HEAD)
+        agent_runner.wait_for_review = stale
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'does not cover'):
+            agent_runner.review(35, 'ch20', {'body': 'T'}, [],
+                                agent_runner.now())
+        self.assertIn('NOT the same commit', self.posted[-1])
+
+    def test_a_disputed_migration_finding_is_not_fixed(self):
+        agent_runner.GENERATED = [
+            'events/migrations/0002_x.py']
+        rule = self.finding('Medium', 'Rule violation',
+                            'Long migration line')
+        with self.assertRaises(agent_runner.Blocked):
+            self.run_loop([[rule]],
+                          [[{'n': 1, 'verdict': 'disputed',
+                             'reason': 'rule 1 exempts it'}]])
+        self.assertEqual(self.fixed, [])
+        self.assertIn('Dispute (never confirm)',
+                      agent_runner.generated_note())
 
     def test_a_stale_review_never_meets_the_gate(self):
         with self.assertRaisesRegex(agent_runner.Blocked,
