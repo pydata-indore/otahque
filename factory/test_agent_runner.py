@@ -1318,5 +1318,19 @@ class KeepCommittedTests(unittest.TestCase):
         self.assertEqual(agent_runner.run_migrations(), [new])
 
 
+class TokenTests(unittest.TestCase):
+    """The run stops when its PR could not start the checks."""
+
+    def test_missing_agent_token_stops_the_run(self):
+        reason = agent_runner.token_problem('false')
+        self.assertIn('AGENT_GH_TOKEN', reason)
+        self.assertIn('checks', reason)
+
+    def test_agent_token_set_or_unknown_is_fine(self):
+        self.assertIsNone(agent_runner.token_problem('true'))
+        # A run outside Actions does not say either way.
+        self.assertIsNone(agent_runner.token_problem(''))
+
+
 if __name__ == '__main__':
     unittest.main()

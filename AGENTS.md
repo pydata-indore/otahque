@@ -45,7 +45,13 @@ run:
 ```
 uv run python manage.py check
 uv run python manage.py test
+uv run python manage.py makemigrations --check --dry-run
 ```
+
+The same checks, plus the runner's tests and rule 1's line limit, run
+on every pull request in
+[`.github/workflows/checks.yml`](.github/workflows/checks.yml). `main`
+accepts a merge only when that `checks` job passes.
 
 `test` with no app name runs the tests of every app (`events`,
 and `accounts` from Chapter 17).

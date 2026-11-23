@@ -1,0 +1,66 @@
+# Runs the project's checks on every pull request into main
+# and every push to main. Branch protection requires the
+# `checks` job to pass before a merge. What each check is for:
+# AGENTS.md, "Verify" and rule 1.
+name: Checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install the locked environment
+        run: uv sync --locked
+
+      - name: Create .env for the checks
+        run: |
+          key=$(python3 -c \
+            'import secrets; print(secrets.token_urlsafe(50))')
+          {
+            echo "DJANGO_SECRET_KEY=$key"
+            echo "DJANGO_DEBUG=True"
+            echo "DJANGO_ALLOWED_HOSTS="
+          } > .env
+
+      - name: Django system check
+        run: uv run python manage.py check
+
+      - name: Tests (every app)
+        run: uv run python manage.py test
+
+      - name: No model change without a migration
+        run: uv run python manage.py makemigrations --check --dry-run
+
+      - name: Agent runner tests
+        run: uv run python -m unittest factory/test_agent_runner.py
+
+      # Rule 1: the book prints this code. Generated migrations
+      # keep Django's layout, and factory/ is not printed.
+      - name: At most 65 characters per line
+        run: |
+          git ls-files '*.py' '*.html' \
+            | grep -v -e '/migrations/' -e '^factory/' \
+            | xargs awk 'length > 65 {
+                printf "%s:%d has %d characters\n",
+                  FILENAME, FNR, length; bad = 1 }
+                END { exit bad }'

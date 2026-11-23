@@ -58,6 +58,9 @@ jobs:
             }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: >-
             ${{ secrets.AGENT_GH_TOKEN || secrets.GITHUB_TOKEN }}
+          # The runner stops when this is false: see
+          # token_problem() in factory/agent_runner.py.
+          AGENT_TOKEN_SET: ${{ secrets.AGENT_GH_TOKEN != '' }}
           EURI_API_KEY: ${{ secrets.EURI_API_KEY }}
           EURI_MODEL: ${{ vars.EURI_MODEL }}
           EURI_BASE_URL: ${{ vars.EURI_BASE_URL }}
