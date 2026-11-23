@@ -7,7 +7,7 @@ from .models import User
 
 
 class UserModelTests(SimpleTestCase):
-    """The User model's rules, checked without a database."""
+    """The custom user: email, password hash, required fields."""
 
     def test_user_model_is_accounts_user(self):
         self.assertIs(get_user_model(), User)
@@ -36,7 +36,7 @@ class UserModelTests(SimpleTestCase):
 
 
 class UserManagerTests(SimpleTestCase):
-    """The manager's refusals, checked before any save."""
+    """The manager's rules for members and superusers."""
 
     def test_create_user_requires_an_email(self):
         with self.assertRaisesMessage(
