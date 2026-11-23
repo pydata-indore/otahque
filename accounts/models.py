@@ -1,3 +1,4 @@
+"""Models for Otahque accounts and authentication."""
 from django.contrib.auth.models import (
     AbstractBaseUser,
     PermissionsMixin,
