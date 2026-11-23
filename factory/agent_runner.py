@@ -324,9 +324,17 @@ def file_text(paths):
     return '\n\n'.join(parts)
 
 
-def step_files():
+def ticket_docs(issue):
+    """Return the existing docs the ticket names, in order."""
+    named = re.findall(r'`(docs/[\w/.-]+\.md)`', issue['body'])
+    return [path for path in dict.fromkeys(named)
+            if (ROOT / path).is_file()]
+
+
+def step_files(issue):
     """Return the files the agent sees while it writes code."""
-    return file_text(code_files() + [SETTINGS, 'README.md'])
+    return file_text(code_files() + [SETTINGS, 'README.md']
+                     + ticket_docs(issue))
 
 
 def code_files():
@@ -565,6 +573,8 @@ REFERENCE_NOTE = (
     'AGENTS.md and the 65-character limit come first if they '
     'disagree.\n\n')
 REFERENCE_TEXT = None
+# Files the script made with startapp, not the model.
+STARTAPP_FILES = []
 
 
 def reference_text(issue):
@@ -901,6 +911,9 @@ def main():
             raise Blocked(f'startapp {app} failed:\n'
                           + fence(tail(out)))
         log(f'- Created `{app}/` with `manage.py startapp`\n')
+        code, out = run(['git', 'ls-files', '--others',
+                         '--exclude-standard', app])
+        STARTAPP_FILES.extend(out.split())
 
     log('### 2. Tests first')
     messages = [
@@ -958,14 +971,15 @@ def main():
     log('\n### 3. Code')
     messages.append({'role': 'user', 'content': (
         'The tests fail as required:\n\n' + red
-        + '\n\nStep 2 of 2: write the code and README change '
-        'that make every test pass and meet each acceptance '
-        'criterion. Do NOT change any test file now: if a '
+        + '\n\nStep 2 of 2: write the code, README, and docs '
+        'changes that make every test pass and meet each '
+        'acceptance criterion, including every file the '
+        'ticket names. Do NOT change any test file now: if a '
         'test is wrong, answer BLOCKED. Only startapp has '
         'run, for a new app: a file not shown below or in the '
         'project files above does not exist, so create it '
         'with an empty SEARCH. Current files:\n\n'
-        + step_files())})
+        + step_files(issue))})
 
     def no_test_edits(path):
         return may_edit(path) and not TESTS.fullmatch(path)
@@ -998,7 +1012,7 @@ def main():
             + json.dumps(unmet, indent=1)
             + '\n\nFix them without changing test files. '
             'Current files:\n\n'
-            + step_files())})
+            + step_files(issue))})
         report = edit_loop(messages, no_test_edits,
                            run_checks, 'Code (criteria)')
 
@@ -1077,7 +1091,7 @@ def review(pr, branch, issue, messages, since):
             + json.dumps(confirmed, indent=1)
             + '\n\nFull review:\n' + findings
             + '\n\nCurrent files:\n\n'
-            + step_files())})
+            + step_files(issue))})
         edit_loop(messages, may_edit, run_checks,
                   f'Review fix {round_}')
         titles = '; '.join(f['title'] for f in confirmed)
@@ -1117,6 +1131,17 @@ def criterion_label(c, ticket):
     return text.replace('|', '/')
 
 
+def startapp_note():
+    """Tell the criteria check which files startapp made."""
+    if not STARTAPP_FILES:
+        return ''
+    return (
+        'The script ran startapp before the model, which '
+        'created: ' + ', '.join(STARTAPP_FILES) + '. Their '
+        'stub content is not the model\'s change; judge only '
+        'what the model added to them.\n\n')
+
+
 def accept(issue, report, red):
     """Ask a fresh conversation to check every criterion."""
     return ask_json([
@@ -1132,6 +1157,7 @@ def accept(issue, report, red):
             'with your message (no attribution) and put the '
             'failing-test output above in the PR body; '
             'judge those criteria on that basis.\n\n'
+            + startapp_note() +
             'Return JSON: {"criteria": [{"n": 1, '
             '"criterion": "the criterion in about eight '
             'words", "met": true, "observed": '

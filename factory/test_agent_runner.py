@@ -173,6 +173,51 @@ class AppsToCreateTests(unittest.TestCase):
         self.assertEqual(self.apps('A new `payments` app'), [])
 
 
+class TicketDocsTests(unittest.TestCase):
+    """The agent sees the existing docs the ticket names."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        agent_runner.ROOT = Path(self.tmp.name)
+        design = agent_runner.ROOT / 'docs/design'
+        design.mkdir(parents=True)
+        (design / 'erd.md').write_text('# ERD\n')
+
+    def test_existing_named_docs_are_shown_once(self):
+        body = ('Update `docs/design/erd.md`, add '
+                '`docs/adr/ADR-002-user-model.md`, and check '
+                '`docs/design/erd.md` again.')
+        docs = agent_runner.ticket_docs({'body': body})
+        self.assertEqual(docs, ['docs/design/erd.md'])
+
+    def test_a_ticket_without_docs_shows_none(self):
+        docs = agent_runner.ticket_docs({'body': 'No docs.'})
+        self.assertEqual(docs, [])
+
+
+class StartappNoteTests(unittest.TestCase):
+    """The criteria check is told which files startapp made."""
+
+    def setUp(self):
+        self.addCleanup(setattr, agent_runner, 'STARTAPP_FILES',
+                        agent_runner.STARTAPP_FILES)
+
+    def test_no_note_without_startapp(self):
+        agent_runner.STARTAPP_FILES = []
+        self.assertEqual(agent_runner.startapp_note(), '')
+
+    def test_the_note_names_each_file(self):
+        agent_runner.STARTAPP_FILES = ['accounts/views.py',
+                                       'accounts/admin.py']
+        note = agent_runner.startapp_note()
+        self.assertIn('accounts/views.py', note)
+        self.assertIn('accounts/admin.py', note)
+        self.assertIn('not the model', note)
+
+
 class RunChecksTests(unittest.TestCase):
     """run_checks() never runs Django on refused changes."""
 
