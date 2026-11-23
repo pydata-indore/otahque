@@ -781,6 +781,12 @@ class SearchFeedbackTests(unittest.TestCase):
             'a.py', old, 'x = 1\n', 0)
         self.assertIn('line break', message)
 
+    def test_an_extra_blank_line_is_not_a_missing_break(self):
+        message = agent_runner.search_problem(
+            'a.py', 'x = 1\n', 'x = 1\n\n', 0)
+        self.assertNotIn('line break', message)
+        self.assertIn('blank lines differ', message)
+
     def setup_root(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -824,8 +830,10 @@ class SearchFeedbackTests(unittest.TestCase):
             made = True
         if not made:
             self.skipTest('could not make a folder link')
-        self.addCleanup(lambda: os.path.isdir(link)
-                        and os.rmdir(link))
+        # A symlink is unlinked; a Windows junction is removed
+        # like an empty folder. Neither touches the target.
+        self.addCleanup(lambda: link.unlink()
+                        if link.is_symlink() else os.rmdir(link))
         reply = block('accounts/tests_dir/tests.py',
                       'x\n', 'y\n')
         self.assertTrue(agent_runner.tests_step_path(

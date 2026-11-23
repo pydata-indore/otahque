@@ -495,7 +495,8 @@ def search_problem(path, old, search, count):
             return (f'SEARCH text in {path} has the line '
                     f'{line!r} {want[line]} times, but the file '
                     f'has it {have[line]} times.' + copy)
-    if search.endswith('\n') and search[:-1] in old:
+    if (search.endswith('\n') and not old.endswith('\n')
+            and old.endswith(search[:-1])):
         return (f'SEARCH text in {path} ends with a line break '
                 'that the file does not have there (its last '
                 'line has none).' + copy)
