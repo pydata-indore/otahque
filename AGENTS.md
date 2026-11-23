@@ -5,10 +5,11 @@
 Otahque is a Django 6.1.2 application that helps volunteer-led
 communities run recurring events. This repository is the code of the
 Otahque Django book: every merged change is printed in the book, so a
-beginner must be able to follow it. The code covers Chapters 6 to 16
+beginner must be able to follow it. The code covers Chapters 6 to 18
 (project, settings, URLs, views, templates, static files, Tailwind CSS,
-daisyUI, the proposed data model in `docs/design/erd.md`, and the
-`Event` model). There is no migration, stored data, or account yet;
+daisyUI, the proposed data model in `docs/design/erd.md`, the `Event`
+model, the custom user `accounts.User`, and their first migrations).
+Data lives only in each reader's local `db.sqlite3`, never in Git;
 sample events are fictional and held in memory.
 
 Full detail: [docs/STANDARDS.md](docs/STANDARDS.md),

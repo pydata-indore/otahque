@@ -27,9 +27,10 @@ going through a pull request and a Qodo review before it reaches the book.
 | Models, users, migrations, ORM, admin | 19 to 23 | Planned |
 | Forms, accounts, permissions, registration | 24 to 34 | Planned |
 
-The full 75-chapter contents are on the book site. There are no event
-models, accounts, stored data, or deployed server yet. Sample events are
-fictional and held in memory.
+The full 75-chapter contents are on the book site. The `Event` model and
+the custom user (`accounts.User`) have their first migrations; there is
+no stored data in the repository and no deployed server yet. Sample
+events are fictional and held in memory.
 
 `main` holds only this README and the working docs. All code arrives
 through reviewed pull requests, one branch each.
@@ -61,7 +62,7 @@ Then check and test:
 
 ```
 uv run python manage.py check
-uv run python manage.py test events
+uv run python manage.py test
 ```
 
 The compiled stylesheet, `static/otahque/site.css`, is committed, so
@@ -75,8 +76,9 @@ npm run build
 ```
 
 `uv run python manage.py runserver` serves the site on loopback only.
-Leave migrations unapplied: the custom user model comes first, in its
-planned chapter.
+Before the first `runserver`, create the local tables with
+`uv run python manage.py migrate`. The database, `db.sqlite3`, stays on
+your machine and out of Git.
 
 ## How changes are made
 
