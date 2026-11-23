@@ -5,6 +5,7 @@ from pathlib import Path
 from django.contrib.auth import get_user_model
 from django.contrib.staticfiles import finders
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 from django.template.loader import render_to_string
 from django.test import SimpleTestCase, TestCase
@@ -346,8 +347,12 @@ class OrganizerAssignmentTests(TestCase):
         )
 
 
-class EventModelTests(SimpleTestCase):
-    """The Event model's rules, checked without a database."""
+class EventModelTests(TestCase):
+    """The Event model's rules, on unsaved events.
+
+    A TestCase from Chapter 21: full_clean() now checks the
+    constraints, and that needs the database.
+    """
 
     def make_event(self, **changes):
         """Make a valid unsaved event with these changes."""
@@ -381,3 +386,76 @@ class EventModelTests(SimpleTestCase):
                 "Value 'archived' is not a valid choice."
             ]},
         )
+
+
+class EventRuleTests(TestCase):
+    """The database refuses rows that break a rule."""
+
+    def test_capacity_must_be_more_than_zero(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                save_event(capacity=0)
+        self.assertFalse(Event.objects.exists())
+
+    def test_end_must_be_after_start(self):
+        start = datetime(2027, 2, 1, 18, tzinfo=UTC)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                save_event(starts_at=start, ends_at=start)
+        self.assertFalse(Event.objects.exists())
+
+    def test_only_listed_statuses_can_be_saved(self):
+        for status in Event.Status.values:
+            save_event(status=status)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                save_event(status='archived')
+        self.assertEqual(Event.objects.count(), 3)
+
+    def test_unknown_time_zone_fails_validation(self):
+        event = save_event(timezone='Europe/Londn')
+        with self.assertRaises(ValidationError) as caught:
+            event.full_clean()
+        self.assertEqual(
+            caught.exception.message_dict,
+            {'timezone': [
+                'Europe/Londn is not a known time zone.'
+            ]},
+        )
+
+    def test_one_current_assignment_per_event(self):
+        event = save_event()
+        sam = User.objects.create_user(
+            'sam@example.org', display_name='Sam'
+        )
+        first = OrganizerAssignment.objects.create(
+            event=event, member=sam
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                OrganizerAssignment.objects.create(
+                    event=event, member=sam
+                )
+        day = timedelta(days=1)
+        first.revoked_at = first.assigned_at + day
+        first.save()
+        OrganizerAssignment.objects.create(
+            event=event, member=sam
+        )
+        self.assertEqual(
+            event.organizer_assignments.count(), 2
+        )
+
+    def test_revoked_never_before_assigned(self):
+        event = save_event()
+        sam = User.objects.create_user(
+            'sam@example.org', display_name='Sam'
+        )
+        early = OrganizerAssignment.objects.create(
+            event=event, member=sam
+        )
+        day = timedelta(days=1)
+        early.revoked_at = early.assigned_at - day
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                early.save()

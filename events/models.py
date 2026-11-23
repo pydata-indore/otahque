@@ -1,7 +1,20 @@
 """Models for Otahque's events."""
+from zoneinfo import available_timezones
+
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+
+
+def validate_timezone_name(value):
+    """Refuse names missing from the time-zone database."""
+    if value not in available_timezones():
+        raise ValidationError(
+            '%(value)s is not a known time zone.',
+            code='unknown_timezone',
+            params={'value': value},
+        )
 
 
 class Event(models.Model):
@@ -17,7 +30,9 @@ class Event(models.Model):
     title = models.CharField(max_length=200)
     starts_at = models.DateTimeField()
     ends_at = models.DateTimeField()
-    timezone = models.CharField(max_length=64)
+    timezone = models.CharField(
+        max_length=64, validators=[validate_timezone_name]
+    )
     location = models.CharField(max_length=200)
     capacity = models.PositiveIntegerField()
     status = models.CharField(
@@ -28,6 +43,34 @@ class Event(models.Model):
 
     class Meta:
         ordering = ['starts_at']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(capacity__gt=0),
+                name='event_capacity_gt_0',
+                violation_error_message=(
+                    'Capacity must be more than 0.'
+                ),
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    ends_at__gt=models.F('starts_at')
+                ),
+                name='event_ends_after_start',
+                violation_error_message=(
+                    'An event must end after it starts.'
+                ),
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status__in=[
+                    'draft', 'published', 'cancelled',
+                ]),
+                name='event_status_valid',
+                violation_error_message=(
+                    'Status must be draft, published, '
+                    'or cancelled.'
+                ),
+            ),
+        ]
 
     def __str__(self):
         return self.title
@@ -55,6 +98,30 @@ class OrganizerAssignment(models.Model):
 
     class Meta:
         ordering = ['assigned_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['event', 'member'],
+                condition=models.Q(revoked_at__isnull=True),
+                name='assignment_one_current',
+                violation_error_message=(
+                    'This member already organizes this '
+                    'event.'
+                ),
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(revoked_at__isnull=True)
+                    | models.Q(revoked_at__gte=models.F(
+                        'assigned_at'
+                    ))
+                ),
+                name='assignment_revoked_after_assigned',
+                violation_error_message=(
+                    'An assignment cannot be revoked before '
+                    'it starts.'
+                ),
+            ),
+        ]
 
     def __str__(self):
         return f'{self.member} organizes {self.event}'

@@ -26,12 +26,14 @@ going through a pull request and a Qodo review before it reaches the book.
 | Models, users, migrations, ORM, admin | 18 | Written during the hackathon; chapter drafted |
 | Models, users, migrations, ORM, admin | 19 | Written during the hackathon; chapter drafted |
 | Relationships between models | 20 | Written during the hackathon; chapter drafted |
-| Models, users, migrations, ORM, admin | 21 to 23 | Planned |
+| Validation, constraints, data integrity | 21 | Written during the hackathon; chapter drafted |
+| Models, users, migrations, ORM, admin | 22 to 23 | Planned |
 | Forms, accounts, permissions, registration | 24 to 34 | Planned |
 
-The full 75-chapter contents are on the book site. The `Event` model and
-the custom user (`accounts.User`) have their first migrations; there is
-no stored data in the repository and no deployed server yet. The event
+The full 75-chapter contents are on the book site. The `Event` model,
+the custom user (`accounts.User`), registrations, and organizer
+assignments have their migrations, and from Chapter 21 the database
+refuses rows that break their rules; there is no stored data in the repository and no deployed server yet. The event
 pages show the published events saved in your local `db.sqlite3`, so a
 fresh database lists none until you save one.
 
