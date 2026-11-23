@@ -171,6 +171,17 @@ comment the run cannot read is reported separately. The run
 never force-pushes, never merges, and never
 reuses an existing branch.
 
+## Checks on every pull request
+
+[`checks.yml`](../.github/workflows/checks.yml) runs on every pull
+request into `main`, the runner's included: `manage.py check`,
+`manage.py test`, `makemigrations --check --dry-run`, the runner's
+own tests, and the 65-character limit (rule 1). Branch protection
+requires it to pass before a merge. The runner opens its pull
+requests with `AGENT_GH_TOKEN`, so the checks start on them. A pull
+request opened with the plain workflow token would not start them,
+so the runner refuses to run without that secret.
+
 ## Testing the runner
 
 The runner's own tests are not part of the book, so
@@ -194,10 +205,11 @@ Under Settings, Secrets and variables, Actions:
 | Secret | `EURI_API_KEY` | Key for the model API |
 | Variable | `EURI_MODEL` | Model name |
 | Variable | `EURI_BASE_URL` | OpenAI-compatible base URL |
-| Secret, optional | `AGENT_GH_TOKEN` | Token used instead of the workflow token |
+| Secret | `AGENT_GH_TOKEN` | Token for the PR and comments; the run stops without it |
 
-Without `AGENT_GH_TOKEN`, PRs and comments come from
-`github-actions[bot]`. The checks run without any token or key
+Without `AGENT_GH_TOKEN`, the run stops at the start with that
+reason: a PR from `github-actions[bot]` would never start the
+required checks, and Qodo would not review it. The checks run without any token or key
 in their environment, and the checkout keeps no credentials.
 Git runs with hooks turned off, and the run refuses to commit
 or push if `.git/config` or `.git/hooks` changed while the

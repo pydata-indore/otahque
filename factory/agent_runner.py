@@ -1374,12 +1374,34 @@ def review_text(pr, comment_id):
 
 # ---------- the run ----------
 
+def token_problem(flag):
+    """Return why the run must not start for its token, or None.
+
+    flag is AGENT_TOKEN_SET from agent.yml: 'true' or 'false',
+    or empty outside Actions. A pull request opened with the
+    workflow's own token starts no other workflow, so the
+    required checks (checks.yml) never run on it and it can
+    never be merged; Qodo also answers only a user account.
+    """
+    if flag == 'false':
+        return ('AGENT_GH_TOKEN is not set, so the pull '
+                'request would come from the workflow token: '
+                'the required checks would never start on it '
+                'and Qodo would not review it. Add the secret '
+                'and label the issue again.')
+    return None
+
+
 def main():
     LOG.write_text('', encoding='utf-8')
     log(f'## Agent run for #{ISSUE}\n')
     if RUN_URL:
         log(f'Run: {RUN_URL}\n')
     ensure_labels()
+    problem = token_problem(
+        os.environ.get('AGENT_TOKEN_SET', ''))
+    if problem:
+        raise Blocked(problem)
     global GIT_STATE
     GIT_STATE = git_state()
     issue = json.loads(gh(
