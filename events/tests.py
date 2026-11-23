@@ -2,14 +2,18 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from django.contrib.auth import get_user_model
 from django.contrib.staticfiles import finders
 from django.core.exceptions import ValidationError
+from django.db.models import ProtectedError
 from django.template.loader import render_to_string
 from django.test import SimpleTestCase, TestCase
 from django.urls import resolve, reverse
 
 from . import views
-from .models import Event
+from .models import Event, OrganizerAssignment
+
+User = get_user_model()
 
 
 def save_event(**changes):
@@ -296,6 +300,49 @@ class DesignSystemTests(SimpleTestCase):
         self.assertTrue(
             '.navbar {' in css,
             'site.css has no .navbar rule',
+        )
+
+
+class OrganizerAssignmentTests(TestCase):
+    """An assignment links an organizer to an event."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.event = save_event()
+        cls.member = User.objects.create_user(
+            'sam@example.org', display_name='Sam'
+        )
+        cls.assignment = OrganizerAssignment.objects.create(
+            event=cls.event, member=cls.member
+        )
+
+    def test_assignment_links_event_and_member(self):
+        assignment = self.assignment
+        self.assertEqual(assignment.event, self.event)
+        self.assertEqual(assignment.member, self.member)
+        self.assertIsNone(assignment.revoked_at)
+        self.assertQuerySetEqual(
+            self.event.organizer_assignments.all(),
+            [assignment],
+        )
+        self.assertQuerySetEqual(
+            self.member.organizer_assignments.all(),
+            [assignment],
+        )
+
+    def test_assigned_event_and_member_are_kept(self):
+        for row in (self.event, self.member):
+            model = type(row)
+            with self.subTest(model=model.__name__):
+                with self.assertRaises(ProtectedError):
+                    row.delete()
+                kept = model.objects.filter(pk=row.pk)
+                self.assertTrue(kept.exists())
+
+    def test_unlinked_event_can_be_deleted(self):
+        spare = save_event(title='Spare event')
+        self.assertEqual(
+            spare.delete(), (1, {'events.Event': 1})
         )
 
 
