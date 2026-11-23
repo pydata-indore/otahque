@@ -697,6 +697,49 @@ class MigrationStepTests(unittest.TestCase):
         self.assertFalse(agent_runner.fails_for_new_code(out))
 
 
+class MigrationNoteTests(unittest.TestCase):
+    """The model is told the script writes the migrations."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        agent_runner.ROOT = Path(self.tmp.name)
+        self.addCleanup(setattr, agent_runner, 'GENERATED',
+                        agent_runner.GENERATED)
+
+    def refusal(self):
+        reply = ('FILE: events/migrations/0001_initial.py\n'
+                 '<<<<<<< SEARCH\n=======\nx = 1\n'
+                 '>>>>>>> REPLACE\n')
+        with self.assertRaises(ValueError) as caught:
+            agent_runner.apply_edits(reply,
+                                     agent_runner.may_edit)
+        return str(caught.exception)
+
+    def test_no_note_without_makemigrations(self):
+        use_layout(self)
+        self.assertEqual(agent_runner.migrations_note(), '')
+        self.assertIn('makes no migration', self.refusal())
+
+    def test_the_note_and_refusal_name_makemigrations(self):
+        use_layout(self, makemigrations=[])
+        self.assertIn('makemigrations itself',
+                      agent_runner.migrations_note())
+        self.assertIn('send no block', self.refusal())
+
+    def test_triage_hears_which_files_are_generated(self):
+        use_layout(self, makemigrations=[])
+        agent_runner.GENERATED = []
+        self.assertEqual(agent_runner.generated_note(), '')
+        agent_runner.GENERATED = [
+            'events/migrations/0001_initial.py']
+        note = agent_runner.generated_note()
+        self.assertIn('events/migrations/0001_initial.py', note)
+        self.assertIn('rule 1', note)
+
+
 class KeepCommittedTests(unittest.TestCase):
     """Review rounds keep a migration whose time alone is new."""
 

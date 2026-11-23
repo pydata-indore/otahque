@@ -98,7 +98,10 @@ ticket, in a `## Runner` section with one item a line:
   in the run and runs this command again, so the migrations
   always match the models. The agent can never write or edit a
   migration. Generated migrations keep Django's layout, as the
-  book prints them, so the 65-character check skips them.
+  book prints them, so the 65-character check skips them. Every
+  code, criteria and review-fix prompt tells the model this,
+  and the review triage dismisses a finding that asks to
+  reformat a generated migration, under rule 1.
 - `settings: NAME, NAME`: the settings the agent may change.
   A changed line must belong to a top-level `NAME = ...` (or
   the comment lines directly above it), or be a blank line
