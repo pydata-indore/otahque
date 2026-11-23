@@ -48,14 +48,23 @@ the issue number.
 7. One commit, a pushed branch, and a PR that closes the issue,
    with the failing-test output, the criteria table, and the
    checks.
-8. It waits for Qodo's review, sorts each open finding into
-   confirmed or dismissed, fixes the confirmed ones in a new
-   commit, runs the checks, and posts `/agentic_review`. A
-   Qodo comment that shows only resolved findings counts as a
-   finished review: the run then logs that nothing is open and
-   writes its summary.
-9. A summary comment on the PR lists every verdict. A human
-   reviews and merges.
+8. It waits for Qodo's review of the head commit (the review
+   comment names the commit it covers) and applies the quality
+   gate in `AGENTS.md`. It reads each open finding's severity
+   badge and type. The model judges each High or Medium finding
+   as confirmed or disputed, with evidence; confirmed ones are
+   fixed in a new commit, the checks run, and it posts
+   `/agentic_review` for the next round. Low findings are never
+   changed. A finding whose severity it cannot read counts as
+   High.
+9. The run ends with a gate report on the PR: every High or
+   Medium finding with its type, severity and verdict, the Low
+   findings flagged for a human, and the reviewed commit against
+   the PR head. "Gate met" only when no High or Medium finding is
+   open and the latest review covers the head. Otherwise the
+   report says the task is not done and why (a disputed finding,
+   findings left after `REVIEW_ROUNDS`, or a stale review), and
+   the issue gets `agent-blocked`. A human reviews and merges.
 
 ## Where the agent may work
 

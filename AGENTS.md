@@ -147,6 +147,31 @@ If a template or `static/otahque/source.css` changed, also run
   them earlier would print code the reader has not been taught
   (rule 4).
 
+## Quality gate
+
+A coding task is done only when this gate is met. It applies to any
+agent working here (the factory's runner, or a coding agent in an
+editor) and uses Qodo's severity labels and finding types (Bug, Rule
+violation, Requirement gap).
+
+- Fix every valid High or Medium finding, of any type, Bugs
+  included, then run the checks above and review again until none is
+  left.
+- A High or Medium finding may be disputed only with evidence from
+  the code, the ticket, or these rules (rule 7 names the later
+  chapter). A disputed finding goes to a human, and the task is not
+  done until that person decides.
+- Leave Low findings unchanged, Low Rule violations included, and
+  list every Low finding in the final report for a human.
+- A finding whose severity cannot be read counts as High.
+- The final report lists each finding with its type, severity, and
+  what was done; the checks run; and the commit the latest completed
+  review covers, which must be the head commit.
+- Report the task as not done, with the reason, if a High or Medium
+  finding is still open or disputed, a check failed, the latest
+  review does not cover the head commit, or fix rounds stop making
+  progress.
+
 ## Commits
 
 Do not commit `.env`, `db.sqlite3`, `.venv/`, or `node_modules/`.

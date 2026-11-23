@@ -1316,14 +1316,16 @@ def is_qodo(item):
 def wait_for_review(pr, since):
     """Wait for Qodo's review comment to appear or be updated.
 
-    Return (comment id, has_open). A review with open findings
-    shows a count such as "Bugs (2)". Once every finding is
-    resolved the count disappears and only "Resolved findings"
-    remain; that is a finished review with nothing left to fix.
+    Return (comment id, has_open, reviewed commit). A review
+    with open findings shows a count such as "Bugs (2)". Once
+    every finding is resolved the count disappears and only
+    "Resolved findings" remain; that is a finished review with
+    nothing left to fix. A review that names an older commit
+    than the PR head is still waiting for the new one.
     """
     stamp = since.strftime('%Y-%m-%dT%H:%M:%SZ')
     deadline = min(time.time() + QODO_WAIT, RUN_DEADLINE)
-    heard = False
+    heard = stale = False
     while time.time() < deadline:
         time.sleep(30)
         for item in gh_json(
@@ -1334,11 +1336,20 @@ def wait_for_review(pr, since):
             heard = True
             if 'Code Review by Qodo' not in body:
                 continue
+            reviewed = reviewed_commit(body)
+            if reviewed and reviewed != head_commit():
+                stale = True
+                continue
             has_open = bool(re.search(r'\(\d+\)', body))
             if has_open or 'Resolved' in body:
                 time.sleep(60)  # let the edit settle
-                return item['id'], has_open
+                return item['id'], has_open, reviewed
     out_of_time()
+    if stale:
+        raise Blocked(
+            f'Quality gate not met: Qodo\'s latest review on PR '
+            f'#{pr} does not cover the head commit after '
+            f'{QODO_WAIT // 60} minutes.')
     if heard:
         raise Blocked(
             f'Qodo commented on PR #{pr} but posted no review '
@@ -1558,65 +1569,200 @@ def main():
     review(pr, branch, issue, messages, started)
 
 
+# ---------- the quality gate (AGENTS.md) ----------
+
+# Findings at these severities must be fixed, or disputed with
+# evidence for a human to decide, before the task is done.
+GATE = ('High', 'Medium')
+SEVERITY = re.compile(
+    r'img\.shields\.io/badge/(High|Medium|Low)-')
+KIND = re.compile(
+    r'<code>[^<]*?(Bug|Rule violation|Requirement gap)[^<]*'
+    r'</code>')
+TITLE = re.compile(r'^\s*\d+\\?\.\s+(.+?)\s*<code>', re.M)
+REVIEWED = re.compile(
+    r'<!-- https://github\.com/\S+/commit/([0-9a-f]{40}) -->')
+
+
+def read_finding(comment_):
+    """Return one open Qodo inline finding as a dict.
+
+    Qodo starts each finding with a severity badge (High,
+    Medium or Low) and tags its type (Bug, Rule violation,
+    Requirement gap). A badge the runner cannot read gives the
+    severity '?', which the gate treats as blocking.
+    """
+    body = comment_['body']
+    severity = SEVERITY.search(body)
+    kind = KIND.search(body)
+    title = TITLE.search(body)
+    return {
+        'id': comment_['id'],
+        'title': (html.unescape(title[1]) if title
+                  else plain(body).strip().split('\n')[0])[:120],
+        'severity': severity[1] if severity else '?',
+        'type': kind[1] if kind else '?',
+        'where': (f'{comment_.get("path")}:'
+                  f'{comment_.get("line")}'),
+    }
+
+
+def open_findings(pr):
+    """Return Qodo's open inline findings on the PR."""
+    return [read_finding(c) for c in
+            gh_json(f'repos/{REPO}/pulls/{pr}/comments')
+            if is_qodo(c) and '<s>' not in c['body']
+            and SEVERITY.search(c['body'])]
+
+
+def reviewed_commit(body):
+    """Return the commit Qodo's review comment says it covers."""
+    found = REVIEWED.search(body or '')
+    return found[1] if found else None
+
+
+def head_commit():
+    code, out = run(['git', 'rev-parse', 'HEAD'])
+    return out.strip()
+
+
+def gate_report(rows, low, gate_met, reason, reviewed, head):
+    """Return the gate report the run posts on its PR.
+
+    rows are (round, finding, verdict, reason) for the findings
+    at or above the gate; low are the Low findings, left
+    unchanged and flagged for a human.
+    """
+    lines = ['Quality gate (AGENTS.md): fix every valid High '
+             'or Medium finding, Bugs included; report Low '
+             'findings for a human and leave them unchanged.',
+             '',
+             '| Round | Finding | Type | Severity | Verdict | '
+             'Why |', '|---|---|---|---|---|---|']
+    for round_, f, verdict, why in rows:
+        lines.append(
+            f'| {round_} | {f["title"]} ({f["where"]}) | '
+            f'{f["type"]} | {f["severity"]} | {verdict} | '
+            + why.replace('|', '/').replace('\n', ' ') + ' |')
+    if not rows:
+        lines.append('| - | No High or Medium finding | | | | |')
+    lines += ['', 'Low findings flagged for you, left '
+              'unchanged:']
+    lines += [f'- {f["title"]} ({f["type"]}, {f["where"]})'
+              for f in low] or ['- None.']
+    covered = (reviewed and head and reviewed == head)
+    lines += ['', f'Latest Qodo review covers '
+              f'`{(reviewed or "unknown")[:7]}`; PR head '
+              f'`{head[:7]}`'
+              + ('.' if covered else ': NOT the same commit.'),
+              'Checks: passed on the last commit '
+              '(`manage.py check`, `test`, `makemigrations '
+              '--check`).', '',
+              ('**Gate met.** Ready for a human to review and '
+               'merge.' if gate_met else
+               '**Gate not met: the task is not done.** '
+               + reason)]
+    return '\n'.join(lines)
+
+
+def triage(issue, gate, findings):
+    """Ask the model to confirm or dispute each gate finding."""
+    listed = '\n'.join(
+        f'{n}. [{f["severity"]} {f["type"]}] {f["title"]} '
+        f'({f["where"]})' for n, f in enumerate(gate, 1))
+    answer = ask_json([
+        {'role': 'system', 'content': RULES.split(
+            'Answer ONLY')[0] + 'Answer with one JSON object.'},
+        {'role': 'user', 'content': (
+            f'# Ticket\n{issue["body"]}\n\n# Diff\n'
+            f'{diff_from_main()}\n\n# Qodo review\n{findings}'
+            '\n\n# Findings to judge (High and Medium only)\n'
+            f'{listed}\n\nText between ~~ marks is already '
+            'resolved. Investigate each numbered finding '
+            'against the code and the ticket, including files '
+            'outside the diff that a finding names. '
+            + generated_note()
+            + 'Confirm it if it is valid; dispute it only with '
+            'evidence from the code, the ticket or AGENTS.md. '
+            'Return JSON: {"findings": [{"n": 1, "verdict": '
+            '"confirmed" or "disputed", "reason": '
+            '"evidence"}]}')},
+    ])
+    verdicts = {}
+    for item in answer.get('findings', []):
+        try:
+            n = int(item.get('n'))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= len(gate):
+            verdicts[n] = (
+                'disputed' if item.get('verdict') == 'disputed'
+                else 'confirmed', str(item.get('reason') or ''))
+    # A finding the model skipped is treated as valid.
+    return [verdicts.get(n, ('confirmed', 'not judged'))
+            for n in range(1, len(gate) + 1)]
+
+
 def review(pr, branch, issue, messages, since):
-    verdicts = []
+    """Loop Qodo's review and the fixes until the gate is met."""
+    rows, low = [], []
     for round_ in range(1, REVIEW_ROUNDS + 2):
         log(f'### 5.{round_} Qodo review')
-        comment_id, has_open = wait_for_review(pr, since)
-        if not has_open:
-            log('- Qodo shows no open findings.\n')
-            finish(pr, verdicts, round_ - 1, blocked=None)
-            return
-        findings = review_text(pr, comment_id)
-        triage = ask_json([
-            {'role': 'system', 'content': RULES.split(
-                'Answer ONLY')[0] + 'Answer with one JSON '
-                'object.'},
-            {'role': 'user', 'content': (
-                f'# Ticket\n{issue["body"]}\n\n# Diff\n'
-                f'{diff_from_main()}\n\n# Qodo review\n'
-                f'{findings}\n\nText between ~~ marks is '
-                'already resolved: ignore it. Investigate '
-                'each open finding against the code and the '
-                'ticket. ' + generated_note()
-                + 'Return JSON: {"findings": [{"title": '
-                '"short", "verdict": "confirmed" or '
-                '"dismissed", "reason": "why"}]}')},
-        ])
-        found = triage.get('findings', [])
-        verdicts += [(round_, f) for f in found]
+        comment_id, has_open, reviewed = wait_for_review(
+            pr, since)
+        head = head_commit()
+        found = open_findings(pr) if has_open else []
+        gate = [f for f in found if f['severity'] != 'Low']
+        low = [f for f in found if f['severity'] == 'Low']
         for f in found:
-            log(f'- {f["verdict"]}: {f["title"]} '
-                f'({f["reason"]})')
-        confirmed = [
-            f for f in found if f['verdict'] == 'confirmed']
-        if not confirmed:
-            log('- No confirmed findings open.\n')
-            finish(pr, verdicts, round_, blocked=None)
-            return
+            log(f'- {f["severity"]} {f["type"]}: {f["title"]}')
+        if has_open and not found:
+            return finish(pr, rows, low, False, (
+                'Qodo shows open findings, but the run could '
+                'not read their severity, so the gate cannot '
+                'be checked.'), reviewed, head)
+        if not gate:
+            log('- No High or Medium finding open.\n')
+            return finish(pr, rows, low, True, '', reviewed,
+                          head)
+        verdicts = triage(issue, gate,
+                          review_text(pr, comment_id))
+        rows += [(round_, f, v, why)
+                 for f, (v, why) in zip(gate, verdicts)]
+        for f, (v, why) in zip(gate, verdicts):
+            log(f'  - {v}: {f["title"]} ({why})')
+        fix = [f for f, (v, _) in zip(gate, verdicts)
+               if v == 'confirmed']
+        if not fix:
+            return finish(pr, rows, low, False, (
+                f'{len(gate)} High or Medium finding(s) are '
+                'disputed with evidence; a human decides each '
+                'one before the task is done.'), reviewed, head)
         if round_ > REVIEW_ROUNDS:
             break
-        log(f'\n### 5.{round_} Fixing {len(confirmed)} '
-            'finding(s)')
+        log(f'\n### 5.{round_} Fixing {len(fix)} finding(s)')
         messages.append({'role': 'user', 'content': (
-            'Qodo reviewed the PR. Fix ONLY these confirmed '
-            'findings; keep the tests passing. You may change '
-            'tests now if a finding is about a test.\n\n'
-            + json.dumps(confirmed, indent=1)
-            + '\n\nFull review:\n' + findings
+            'Qodo reviewed the PR. Fix ONLY these High or '
+            'Medium findings; keep the tests passing. You may '
+            'change tests now if a finding is about a test. '
+            'Change '
+            'nothing for Low findings.\n\n'
+            + json.dumps(fix, indent=1, ensure_ascii=False)
+            + '\n\nFull review:\n' + review_text(pr, comment_id)
             + '\n\n' + migrations_note() + 'Current files:\n\n'
             + step_files(issue))})
         edit_loop(messages, may_edit, run_checks,
                   f'Review fix {round_}')
-        titles = '; '.join(f['title'] for f in confirmed)
+        titles = '; '.join(f['title'] for f in fix)
         sha = commit(('Fix review findings: ' + titles)[:72])
         push(branch)
         log(f'- Fix commit `{sha}` pushed')
         since = now()
         comment('pr', pr, '/agentic_review')
-    finish(pr, verdicts, REVIEW_ROUNDS, blocked=(
-        f'Confirmed findings remain after {REVIEW_ROUNDS} '
-        'fix rounds.'))
+    finish(pr, rows, low, False, (
+        f'High or Medium findings remain after {REVIEW_ROUNDS} '
+        'fix rounds, so the loop stopped.'), reviewed,
+        head_commit())
 
 
 def ticket_criteria(body):
@@ -1725,18 +1871,21 @@ def diff_from_main():
     return out
 
 
-def finish(pr, verdicts, rounds, blocked):
-    lines = '\n'.join(
-        f'- Round {r}: {f["verdict"]}: {f["title"]}. '
-        f'{f["reason"]}' for r, f in verdicts) or '- None.'
-    state = (f'Stopped for help: {blocked}' if blocked
-             else 'Ready for a human to review and merge.')
-    comment('pr', pr, (
-        f'Agent summary ({RUN_URL})\n\nQodo findings and the '
-        f'agent\'s verdicts:\n\n{lines}\n\nReview rounds: '
-        f'{rounds}. {state}'))
-    if blocked:
-        raise Blocked(blocked)
+def finish(pr, rows, low, gate_met, reason, reviewed, head):
+    """Post the gate report; stop as not done if it failed.
+
+    The gate is only met when the latest review covers the PR
+    head, so a stale review can never pass it.
+    """
+    if gate_met and reviewed != head:
+        gate_met = False
+        reason = ('The latest Qodo review does not cover the PR '
+                  'head commit, so the gate cannot be checked.')
+    comment('pr', pr, f'Agent summary ({RUN_URL})\n\n'
+            + gate_report(rows, low, gate_met, reason,
+                          reviewed, head))
+    if not gate_met:
+        raise Blocked('Quality gate not met: ' + reason)
 
 
 def stop(reason):
