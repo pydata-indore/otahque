@@ -1,24 +1,22 @@
 {% extends "base.html" %}
-{% load event_labels %}
 
-{% block title %}Sample events | Otahque{% endblock %}
+{% block title %}Events | Otahque{% endblock %}
 
 {% block content %}
-  <h1>Sample events</h1>
-  <p>These fictional events are examples.</p>
+  <h1>Events</h1>
   <ul class="event-list space-y-3">
     {% for event in events %}
       {% partialdef event-row inline %}
         <li class="event-row card border border-base-300
                    bg-base-100 p-4 font-semibold">
           <a href="{% url 'events:detail' event.id %}">
-            {{ event.title|sample_label }}
+            {{ event.title }}
           </a>
         </li>
       {% endpartialdef %}
     {% empty %}
       <li class="event-empty card border border-base-300
-                 bg-base-100 p-4">No sample events yet.</li>
+                 bg-base-100 p-4">No events yet.</li>
     {% endfor %}
   </ul>
 {% endblock %}

@@ -2,7 +2,6 @@
 @import "tailwindcss" source(none);
 @source "../../templates";
 @source "../../events/templates";
-@source "../../events/templatetags";
 
 @plugin "daisyui" {
   themes: false;
@@ -55,11 +54,5 @@
 
   .site-nav :focus-visible {
     outline-color: currentColor;
-  }
-
-  .sample-label {
-    color: #9d480c;
-    font-size: 0.85em;
-    font-weight: 700;
   }
 }
