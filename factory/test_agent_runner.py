@@ -197,6 +197,37 @@ class TicketDocsTests(unittest.TestCase):
         docs = agent_runner.ticket_docs({'body': 'No docs.'})
         self.assertEqual(docs, [])
 
+    def test_a_path_outside_docs_is_not_shown(self):
+        (agent_runner.ROOT / 'notes.md').write_text('private\n')
+        docs = agent_runner.ticket_docs(
+            {'body': 'See `docs/../notes.md`.'})
+        self.assertEqual(docs, [])
+
+    def test_a_doc_the_agent_cannot_edit_is_not_shown(self):
+        adr = agent_runner.ROOT / 'docs/adr'
+        adr.mkdir()
+        (adr / 'ADR-002.v2.md').write_text('# ADR\n')
+        docs = agent_runner.ticket_docs(
+            {'body': 'Edit `docs/adr/ADR-002.v2.md`.'})
+        self.assertEqual(docs, [])
+
+    def test_another_spelling_of_a_doc_is_not_shown(self):
+        body = ('`docs/design/erd.md`, `docs//design/erd.md`, '
+                '`docs/design/./erd.md`')
+        docs = agent_runner.ticket_docs({'body': body})
+        self.assertEqual(docs, ['docs/design/erd.md'])
+
+    def test_a_huge_doc_is_named_but_not_shown(self):
+        limit = agent_runner.DOC_LIMIT
+        big = agent_runner.ROOT / 'docs/design/big.md'
+        big.write_text('x' * (limit + 1))
+        text = agent_runner.doc_text(['docs/design/big.md',
+                                      'docs/design/erd.md'])
+        self.assertIn('--- docs/design/big.md ---', text)
+        self.assertIn('not shown', text)
+        self.assertNotIn('x' * 100, text)
+        self.assertIn('# ERD', text)
+
 
 class StartappNoteTests(unittest.TestCase):
     """The criteria check is told which files startapp made."""

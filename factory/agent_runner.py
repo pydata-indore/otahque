@@ -9,6 +9,7 @@ See factory/README.md.
 import html
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -57,6 +58,12 @@ APPS = ('events', 'accounts')
 APP = '(?:' + '|'.join(APPS) + ')'
 SETTINGS = 'config/settings.py'
 
+# Docs the agent may change: no dots in the path, so nothing
+# like docs/../.env.
+DOCS = re.compile(r'docs/[\w/-]+\.md$')
+# A named doc larger than this is listed but not shown.
+DOC_LIMIT = 20000
+
 # The agent may change only these paths.
 ALLOWED = (
     re.compile(APP + r'/(?!migrations/)[\w/]+\.(py|html)$'),
@@ -64,7 +71,7 @@ ALLOWED = (
     re.compile(re.escape(SETTINGS) + '$'),
     re.compile(r'templates/[\w/]+\.html$'),
     re.compile(r'README\.md$'),
-    re.compile(r'docs/[\w/-]+\.md$'),
+    DOCS,
 )
 TESTS = re.compile(APP + r'/tests[\w/]*\.py$')
 # A new app's empty package files, allowed with its tests.
@@ -325,16 +332,35 @@ def file_text(paths):
 
 
 def ticket_docs(issue):
-    """Return the existing docs the ticket names, in order."""
+    """Return the existing docs the ticket names, in order.
+
+    Only plain paths the agent may edit count, so a ticket can
+    neither point outside docs/ nor name one file twice.
+    """
     named = re.findall(r'`(docs/[\w/.-]+\.md)`', issue['body'])
     return [path for path in dict.fromkeys(named)
-            if (ROOT / path).is_file()]
+            if DOCS.fullmatch(path)
+            and posixpath.normpath(path) == path
+            and (ROOT / path).is_file()]
+
+
+def doc_text(paths):
+    """Return the docs as file text, leaving out huge ones."""
+    parts = []
+    for path in paths:
+        text = (ROOT / path).read_text(encoding='utf-8')
+        if len(text) > DOC_LIMIT:
+            text = (f'(not shown: {len(text)} characters, over '
+                    f'the {DOC_LIMIT} limit)')
+        parts.append(f'--- {path} ---\n{text}')
+    return '\n\n'.join(parts)
 
 
 def step_files(issue):
     """Return the files the agent sees while it writes code."""
-    return file_text(code_files() + [SETTINGS, 'README.md']
-                     + ticket_docs(issue))
+    code = file_text(code_files() + [SETTINGS, 'README.md'])
+    docs = doc_text(ticket_docs(issue))
+    return code + ('\n\n' + docs if docs else '')
 
 
 def code_files():
