@@ -1340,7 +1340,7 @@ def wait_for_review(pr, since):
             if reviewed and reviewed != head_commit(pr):
                 stale = reviewed
                 continue
-            has_open = bool(re.search(r'\(\d+\)', body))
+            has_open = has_open_count(body)
             if has_open or 'Resolved' in body:
                 time.sleep(60)  # let the edit settle
                 return item['id'], has_open, reviewed
@@ -1582,10 +1582,27 @@ FINDING = re.compile(
     r'<code>[^<]*?(?P<type>Bug|Rule violation|Requirement gap)'
     r'[^<]*</code>')
 WHERE = re.compile(r'<code>\[([\w./-]+)\[R?(\d+)')
+OPEN_COUNT = re.compile(r'<code>[^<]*\(\d+\)</code>')
 REVIEWED = re.compile(
     r'<!-- https://github\.com/\S+/commit/([0-9a-f]{40}) -->')
 # Shown to the review triage at most, all named files together.
 FILES_LIMIT = 30000
+
+
+def open_part(body):
+    """Return the review comment above its resolved section."""
+    return (body or '').split('<strong>Resolved findings')[0]
+
+
+def has_open_count(body):
+    """True if the comment shows a count of open findings.
+
+    Qodo tags each category with its count, such as
+    <code>🐞 Bugs (2)</code>. Only that tag counts, and only
+    above the resolved section, so a resolved finding whose
+    title holds "(2)" does not.
+    """
+    return bool(OPEN_COUNT.search(open_part(body)))
 
 
 def read_findings(body):
@@ -1597,7 +1614,7 @@ def read_findings(body):
     findings are struck through and skipped. A finding with no
     severity above it gets '?', which the gate treats as High.
     """
-    body = (body or '').split('<strong>Resolved findings')[0]
+    body = open_part(body)
     events = sorted(
         [(m.start(), 'severity', m) for m in
          SEVERITY.finditer(body)]
@@ -1636,7 +1653,7 @@ def review_state(comment_id):
     body = gh_json(
         f'repos/{REPO}/issues/comments/{comment_id}')['body']
     return (read_findings(body), reviewed_commit(body),
-            bool(re.search(r'\(\d+\)', body)))
+            has_open_count(body))
 
 
 def finding_files(findings):
