@@ -28,4 +28,5 @@ class Event(models.Model):
         ordering = ['starts_at']
 
     def __str__(self):
+        """Return the event's title."""
         return self.title

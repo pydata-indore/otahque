@@ -1,7 +1,8 @@
 """Tests for the accounts app."""
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import SimpleTestCase
+from django.db import IntegrityError
+from django.test import SimpleTestCase, TestCase
 
 from .models import User
 
@@ -56,4 +57,46 @@ class UserManagerTests(SimpleTestCase):
                 password='correct horse',
                 display_name='Sam',
                 is_superuser=False,
+            )
+
+
+class UserCreationTests(TestCase):
+    """Members saved through the manager, in the database."""
+
+    def test_create_user_saves_a_member(self):
+        user = User.objects.create_user(
+            email='Sai@EXAMPLE.org',
+            password='correct horse',
+            display_name='Sai',
+        )
+        saved = User.objects.get(pk=user.pk)
+        self.assertEqual(saved.email, 'Sai@example.org')
+        self.assertTrue(
+            saved.check_password('correct horse')
+        )
+        self.assertTrue(saved.is_active)
+        self.assertFalse(saved.is_staff)
+        self.assertFalse(saved.is_superuser)
+
+    def test_create_superuser_saves_both_flags(self):
+        user = User.objects.create_superuser(
+            email='sam@example.org',
+            password='correct horse',
+            display_name='Sam',
+        )
+        saved = User.objects.get(pk=user.pk)
+        self.assertTrue(saved.is_staff)
+        self.assertTrue(saved.is_superuser)
+
+    def test_email_is_unique_in_the_database(self):
+        User.objects.create_user(
+            email='raj@example.org',
+            password='correct horse',
+            display_name='Raj',
+        )
+        with self.assertRaises(IntegrityError):
+            User.objects.create_user(
+                email='raj@example.org',
+                password='another horse',
+                display_name='Raj K.',
             )
