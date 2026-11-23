@@ -1519,10 +1519,11 @@ def migrations_note():
     return (
         'The script runs makemigrations itself after every '
         'edit you send, so the migrations always match the '
-        'models. Never send a block for any file in a '
-        'migrations/ folder, including __init__.py: those '
-        'edits are refused. If the models are already right, '
-        'the migrations need nothing from you. ')
+        'models. Never send a block for a migration file: '
+        'it is refused. Leave migrations/__init__.py alone '
+        'too; it must stay empty, and the checks fail if it '
+        'is not. If the models are already right, the '
+        'migrations need nothing from you. ')
 
 
 def generated_note():
