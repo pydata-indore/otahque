@@ -1,7 +1,7 @@
 """Tests for the accounts app."""
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.test import SimpleTestCase, TestCase
 
 from .models import User
@@ -70,7 +70,7 @@ class UserCreationTests(TestCase):
             display_name='Sai',
         )
         saved = User.objects.get(pk=user.pk)
-        self.assertEqual(saved.email, 'Sai@example.org')
+        self.assertEqual(saved.email, 'sai@example.org')
         self.assertTrue(
             saved.check_password('correct horse')
         )
@@ -100,3 +100,38 @@ class UserCreationTests(TestCase):
                 password='another horse',
                 display_name='Raj K.',
             )
+
+    def test_email_differing_in_case_is_refused(self):
+        User.objects.create_user(
+            'sai@example.org', display_name='Sai'
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                User.objects.create_user(
+                    'SAI@example.org', display_name='Sai'
+                )
+
+    def test_upper_case_email_cannot_be_saved(self):
+        user = User(
+            email='Sai@example.org', display_name='Sai'
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                user.save()
+
+    def test_full_clean_lower_cases_the_email(self):
+        user = User(
+            email='Sai@Example.ORG', display_name='Sai'
+        )
+        user.set_unusable_password()
+        user.full_clean()
+        self.assertEqual(user.email, 'sai@example.org')
+
+    def test_sign_in_lookup_ignores_case(self):
+        sai = User.objects.create_user(
+            'sai@example.org', display_name='Sai'
+        )
+        found = User.objects.get_by_natural_key(
+            'SAI@Example.org'
+        )
+        self.assertEqual(found, sai)

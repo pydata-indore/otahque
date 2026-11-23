@@ -4,6 +4,7 @@ from django.contrib.auth.models import (
     PermissionsMixin,
 )
 from django.db import models
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 from .managers import UserManager
@@ -24,5 +25,22 @@ class User(AbstractBaseUser, PermissionsMixin):
     EMAIL_FIELD = 'email'
     REQUIRED_FIELDS = ['display_name']
 
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(email=Lower('email')),
+                name='user_email_lowercase',
+                violation_error_message=(
+                    'Email addresses are stored in lower '
+                    'case.'
+                ),
+            ),
+        ]
+
     def __str__(self):
         return self.email
+
+    def clean(self):
+        """Store the email in lower case before validating."""
+        super().clean()
+        self.email = UserManager.normalize_email(self.email)

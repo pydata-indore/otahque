@@ -5,11 +5,13 @@
 Otahque is a Django 6.1.2 application that helps volunteer-led
 communities run recurring events. This repository is the code of the
 Otahque Django book: every merged change is printed in the book, so a
-beginner must be able to follow it. The code covers Chapters 6 to 19
+beginner must be able to follow it. The code covers Chapters 6 to 21
 (project, settings, URLs, views, templates, static files, Tailwind CSS,
 daisyUI, the proposed data model in `docs/design/erd.md`, the `Event`
-model, the custom user `accounts.User`, their first migrations, and
-the ORM queries behind the event pages).
+model, the custom user `accounts.User`, their migrations, the ORM
+queries behind the event pages, registrations and organizer
+assignments, and the validators and database constraints that keep
+their data valid).
 Data lives only in each reader's local `db.sqlite3`, never in Git;
 the event pages show the published events saved there, and test
 events are fictional.
@@ -142,10 +144,10 @@ If a template or `static/otahque/source.css` changed, also run
   book-wide change across several chapters, such as a docstring pass,
   is one capability.
 - Why: the code grows one chapter at a time and is incomplete on
-  purpose. Chapter 16's `Event` accepts an `ends_at` before `starts_at`
-  because validation and constraints are taught in Chapter 21; adding
-  them earlier would print code the reader has not been taught
-  (rule 4).
+  purpose. From Chapter 16 to Chapter 20, `Event` accepted an
+  `ends_at` before `starts_at`, because validation and constraints
+  are taught in Chapter 21; adding them earlier would have printed
+  code the reader had not been taught (rule 4).
 
 ## Quality gate
 
