@@ -1582,7 +1582,9 @@ FINDING = re.compile(
     r'<code>[^<]*?(?P<type>Bug|Rule violation|Requirement gap)'
     r'[^<]*</code>')
 WHERE = re.compile(r'<code>\[([\w./-]+)\[R?(\d+)')
-OPEN_COUNT = re.compile(r'<code>[^<]*\(\d+\)</code>')
+# A clean review shows "(0)" for every category (Chapter 20,
+# PR 40), so only a count above zero means open findings.
+OPEN_COUNT = re.compile(r'<code>[^<]*\([1-9]\d*\)</code>')
 REVIEWED = re.compile(
     r'<!-- https://github\.com/\S+/commit/([0-9a-f]{40}) -->')
 # Shown to the review triage at most, all named files together.
