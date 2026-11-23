@@ -33,9 +33,10 @@ going through a pull request and a Qodo review before it reaches the book.
 The full 75-chapter contents are on the book site. The `Event` model,
 the custom user (`accounts.User`), registrations, and organizer
 assignments have their migrations, and from Chapter 21 the database
-refuses rows that break their rules; there is no stored data in the repository and no deployed server yet. The event
-pages show the published events saved in your local `db.sqlite3`, so a
-fresh database lists none until you save one.
+refuses rows that break their rules. There is no stored data in the
+repository and no deployed server yet. The event pages show the
+published events saved in your local `db.sqlite3`, so a fresh
+database lists none until you save one.
 
 `main` holds only this README and the working docs. All code arrives
 through reviewed pull requests, one branch each.
