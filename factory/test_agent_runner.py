@@ -826,7 +826,8 @@ class SearchFeedbackTests(unittest.TestCase):
             self.skipTest('could not make a folder link')
         self.addCleanup(lambda: os.path.isdir(link)
                         and os.rmdir(link))
-        reply = block('accounts/tests_dir/tests.py', 'x\n', 'y\n')
+        reply = block('accounts/tests_dir/tests.py',
+                      'x\n', 'y\n')
         self.assertTrue(agent_runner.tests_step_path(
             'accounts/tests_dir/tests.py'))
         self.assertEqual(agent_runner.retry_files(
