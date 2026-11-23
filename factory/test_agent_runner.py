@@ -968,6 +968,172 @@ class NamedTestsTests(unittest.TestCase):
                       self.missing())
 
 
+def qodo_comment(severity, kind, title, struck=False, cid=1):
+    """Return an inline comment shaped like Qodo's on a PR."""
+    body = (f'<img src="https://img.shields.io/badge/{severity}-'
+            '634FD1?style=flat-square" alt="x">\n\n'
+            f'1\\. {title} <code>{kind}</code> '
+            '<code>⛨ Security</code>\n\n<pre>Details.</pre>')
+    if struck:
+        body = '<s>' + body + '</s>'
+    return {'id': cid,
+            'user': {'login': 'qodo-code-review[bot]'},
+            'body': body, 'path': 'events/views.py', 'line': 14}
+
+
+class GateReadingTests(unittest.TestCase):
+    """The gate reads each finding's severity and type."""
+
+    def test_severity_type_and_title_are_read(self):
+        f = agent_runner.read_finding(qodo_comment(
+            'High', '🐞 Bug', 'Retry prompts can expose files'))
+        self.assertEqual(
+            (f['severity'], f['type'], f['title'], f['where']),
+            ('High', 'Bug', 'Retry prompts can expose files',
+             'events/views.py:14'))
+
+    def test_rule_violations_and_requirement_gaps(self):
+        rule = agent_runner.read_finding(qodo_comment(
+            'Low', '📘 Rule violation', 'A long line'))
+        gap = agent_runner.read_finding(qodo_comment(
+            'Medium', '📎 Requirement gap', 'Missing test'))
+        self.assertEqual((rule['severity'], rule['type']),
+                         ('Low', 'Rule violation'))
+        self.assertEqual((gap['severity'], gap['type']),
+                         ('Medium', 'Requirement gap'))
+
+    def test_an_unreadable_badge_blocks_as_unknown(self):
+        comment_ = qodo_comment('High', '🐞 Bug', 'T')
+        comment_['body'] = comment_['body'].replace(
+            'badge/High', 'badge/Severe')
+        self.assertEqual(
+            agent_runner.read_finding(comment_)['severity'], '?')
+
+    def test_resolved_and_other_comments_are_not_open(self):
+        comments = [
+            qodo_comment('High', '🐞 Bug', 'Open one', cid=1),
+            qodo_comment('High', '🐞 Bug', 'Done', True, cid=2),
+            {'id': 3, 'user': {'login': 'someone'},
+             'body': qodo_comment('High', '🐞 Bug', 'x')['body'],
+             'path': 'a.py', 'line': 1},
+        ]
+        self.addCleanup(setattr, agent_runner, 'gh_json',
+                        agent_runner.gh_json)
+        agent_runner.gh_json = lambda path: comments
+        found = agent_runner.open_findings(35)
+        self.assertEqual([f['id'] for f in found], [1])
+
+    def test_the_reviewed_commit_is_read_from_the_footer(self):
+        sha = 'a' * 40
+        body = (f'<!-- https://github.com/o/r/commit/{sha} -->\n'
+                '<a href="https://www.qodo.ai">Qodo</a>')
+        self.assertEqual(agent_runner.reviewed_commit(body), sha)
+        self.assertIsNone(agent_runner.reviewed_commit('none'))
+
+
+class GateLoopTests(unittest.TestCase):
+    """The review loop ends only when the gate is met."""
+
+    HEAD = 'b' * 40
+
+    def setUp(self):
+        self.posted, self.fixed = [], []
+        self.reviews = []
+        fake = {
+            'wait_for_review': lambda pr, since:
+                self.reviews.pop(0)[:2] + (self.HEAD,),
+            'open_findings': lambda pr: self.findings.pop(0),
+            'head_commit': lambda: self.HEAD,
+            'review_text': lambda pr, cid: 'review',
+            'diff_from_main': lambda: 'diff',
+            'comment': lambda kind, n, text:
+                self.posted.append(text),
+            'edit_loop': lambda *a: self.fixed.append(a[-1]),
+            'commit': lambda message: 'c0ffee1',
+            'push': lambda branch: None,
+            'step_files': lambda issue: '',
+            'log': lambda text: None,
+            'REVIEW_ROUNDS': 2,
+        }
+        for name, value in fake.items():
+            self.addCleanup(setattr, agent_runner, name,
+                            getattr(agent_runner, name))
+            setattr(agent_runner, name, value)
+        self.addCleanup(setattr, agent_runner, 'ask_json',
+                        agent_runner.ask_json)
+        self.addCleanup(setattr, agent_runner, 'GENERATED',
+                        agent_runner.GENERATED)
+        agent_runner.GENERATED = []
+        use_layout(self)
+
+    def run_loop(self, findings, verdicts):
+        self.findings = findings
+        self.reviews = [(1, bool(f)) for f in findings]
+        replies = list(verdicts)
+        agent_runner.ask_json = lambda messages: {
+            'findings': replies.pop(0)}
+        agent_runner.review(35, 'ch20', {'body': 'Ticket'}, [],
+                            agent_runner.now())
+
+    def finding(self, severity, kind='Bug', title='T'):
+        return {'id': 1, 'title': title, 'severity': severity,
+                'type': kind, 'where': 'a.py:1'}
+
+    def test_only_low_findings_meet_the_gate(self):
+        low = self.finding('Low', 'Rule violation', 'Long line')
+        self.run_loop([[low]], [])
+        self.assertEqual(self.fixed, [])
+        self.assertIn('**Gate met.**', self.posted[-1])
+        self.assertIn('Long line (Rule violation',
+                      self.posted[-1])
+
+    def test_a_valid_medium_bug_is_fixed_then_rechecked(self):
+        bug = self.finding('Medium', 'Bug', 'Wrong 404')
+        self.run_loop([[bug], []],
+                      [[{'n': 1, 'verdict': 'confirmed',
+                         'reason': 'real'}]])
+        self.assertEqual(self.fixed, ['Review fix 1'])
+        self.assertIn('**Gate met.**', self.posted[-1])
+        self.assertIn('Wrong 404', self.posted[-1])
+
+    def test_a_disputed_high_finding_is_not_done(self):
+        high = self.finding('High')
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'Quality gate not met'):
+            self.run_loop([[high]],
+                          [[{'n': 1, 'verdict': 'disputed',
+                             'reason': 'Chapter 21'}]])
+        self.assertEqual(self.fixed, [])
+        self.assertIn('a human decides', self.posted[-1])
+
+    def test_a_finding_the_model_skips_is_fixed(self):
+        bug = self.finding('High')
+        self.run_loop([[bug], []], [[]])
+        self.assertEqual(self.fixed, ['Review fix 1'])
+
+    def test_findings_left_after_the_last_round_fail(self):
+        bug = self.finding('Medium')
+        yes = [{'n': 1, 'verdict': 'confirmed', 'reason': 'r'}]
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'fix rounds'):
+            self.run_loop([[bug], [bug], [bug]], [yes, yes, yes])
+        self.assertEqual(len(self.fixed), 2)
+
+    def test_unknown_severity_counts_as_blocking(self):
+        odd = self.finding('?')
+        with self.assertRaises(agent_runner.Blocked):
+            self.run_loop([[odd]],
+                          [[{'n': 1, 'verdict': 'disputed',
+                             'reason': 'r'}]])
+
+    def test_a_stale_review_never_meets_the_gate(self):
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'head commit'):
+            agent_runner.finish(35, [], [], True, '', 'a' * 40,
+                                self.HEAD)
+        self.assertIn('NOT the same commit', self.posted[-1])
+
+
 class KeepCommittedTests(unittest.TestCase):
     """Review rounds keep a migration whose time alone is new."""
 
