@@ -11,6 +11,9 @@
       <p>From {{ event.starts_at|date:"l j F Y, H:i T" }}</p>
       <p>Until {{ event.ends_at|date:"l j F Y, H:i T" }}</p>
     {% endtimezone %}
+    {% if now < event.ends_at %}
+      <p>{% include "events/places.html" %}</p>
+    {% endif %}
     <p>{{ event.location }}</p>
   </article>
   <p>

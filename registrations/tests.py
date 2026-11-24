@@ -124,3 +124,17 @@ class RegistrationTests(TestCase):
             ['This member already has a place at '
              'this event.'],
         )
+
+    def test_active_skips_cancelled_places(self):
+        self.registration.status = 'cancelled'
+        self.registration.cancelled_at = timezone.now()
+        self.registration.save()
+        again = Registration.objects.create(
+            event=self.event, member=self.member
+        )
+        self.assertQuerySetEqual(
+            self.event.registrations.active(), [again]
+        )
+        self.assertEqual(
+            Registration.objects.active().count(), 1
+        )

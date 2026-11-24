@@ -10,6 +10,8 @@ from django.db.models import ProtectedError
 from django.template.loader import render_to_string
 from django.test import SimpleTestCase, TestCase
 from django.urls import resolve, reverse
+from django.utils import timezone
+from registrations.models import Registration
 
 from . import views
 from .models import Event, OrganizerAssignment
@@ -83,34 +85,47 @@ class RoutingTests(TestCase):
 
 
 class EventListTests(TestCase):
-    """The list shows published events only."""
+    """Upcoming published events first, then past ones."""
 
     @classmethod
     def setUpTestData(cls):
-        save_event(
-            title='Django workshop',
-            starts_at=datetime(2026, 12, 3, 9,
-                               tzinfo=UTC),
-        )
-        save_event(title='Python meetup')
+        now = timezone.now()
+        for title, days in [('Open lab', 0),
+                            ('Django workshop', 14),
+                            ('Python meetup', 7),
+                            ('Leeds social', -7),
+                            ('Autumn walk', -30)]:
+            start = now + timedelta(days=days, hours=-1)
+            save_event(title=title, starts_at=start)
         save_event(title='Spring planning',
                    status=Event.Status.DRAFT)
         save_event(title='Autumn social',
                    status=Event.Status.CANCELLED)
 
-    def test_published_events_soonest_first(self):
-        with self.assertNumQueries(1):
+    def test_upcoming_first_then_past(self):
+        with self.assertNumQueries(2):
             response = self.client.get('/events/')
         html = response.content.decode()
-        self.assertLess(html.index('Python meetup'),
-                        html.index('Django workshop'))
+        titles = ['Open lab', 'Python meetup',
+                  'Django workshop', 'Past events',
+                  'Leeds social', 'Autumn walk']
+        places = [html.index(title) for title in titles]
+        self.assertEqual(places, sorted(places))
         self.assertNotContains(response, 'Spring planning')
         self.assertNotContains(response, 'Autumn social')
+
+    def test_marks_current_and_past_events(self):
+        response = self.client.get('/events/')
+        self.assertContains(
+            response, 'Happening now', count=1
+        )
+        self.assertContains(response, 'event-past', count=1)
 
     def test_empty_list(self):
         Event.objects.all().delete()
         response = self.client.get('/events/')
-        self.assertContains(response, 'No events yet.')
+        self.assertContains(response, 'No upcoming events.')
+        self.assertNotContains(response, 'Past events')
 
 
 class EventDetailTests(TestCase):
@@ -253,12 +268,17 @@ class EventRowPartialTests(SimpleTestCase):
     """The event row partial renders one event."""
 
     def test_row_renders_alone(self):
-        event = Event(pk=7, title='<b>Not a tag</b>')
+        start = datetime(2026, 11, 19, 18, 30, tzinfo=UTC)
+        event = Event(pk=7, title='<b>Not a tag</b>',
+                      starts_at=start,
+                      ends_at=start + timedelta(hours=2),
+                      timezone='Europe/London')
         html = render_to_string(
             'events/list.html#event-row', {'event': event}
         )
         self.assertIn('href="/events/7/"', html)
         self.assertIn('&lt;b&gt;Not a tag', html)
+        self.assertIn('Thu 19 Nov 2026, 18:30 GMT', html)
         self.assertNotIn('<nav', html)
 
 
@@ -459,3 +479,120 @@ class EventRuleTests(TestCase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 early.save()
+
+
+class EventQuerySetTests(TestCase):
+    """Named questions about events, in one place."""
+
+    @classmethod
+    def setUpTestData(cls):
+        save_event(
+            title='Django workshop',
+            starts_at=datetime(2026, 12, 3, 9,
+                               tzinfo=UTC),
+            location='Virtual',
+        )
+        save_event(title='Python meetup')
+        save_event(title='Spring planning',
+                   status=Event.Status.DRAFT)
+        save_event(title='Autumn social',
+                   status=Event.Status.CANCELLED)
+
+    def test_published_keeps_only_published(self):
+        self.assertQuerySetEqual(
+            Event.objects.published(),
+            ['Python meetup', 'Django workshop'],
+            transform=str,
+        )
+
+    def test_published_chains_with_other_methods(self):
+        virtual = Event.objects.filter(location='Virtual')
+        self.assertQuerySetEqual(
+            virtual.published(), ['Django workshop'],
+            transform=str,
+        )
+        self.assertQuerySetEqual(
+            Event.objects.published().exclude(
+                location='Virtual'
+            ),
+            ['Python meetup'],
+            transform=str,
+        )
+
+    def test_upcoming_and_past_split_at_now(self):
+        published = Event.objects.published()
+        during = datetime(2026, 11, 19, 19, tzinfo=UTC)
+        self.assertQuerySetEqual(
+            published.upcoming(during),
+            ['Python meetup', 'Django workshop'],
+            transform=str,
+        )
+        later = datetime(2026, 11, 25, tzinfo=UTC)
+        self.assertQuerySetEqual(
+            published.upcoming(later), ['Django workshop'],
+            transform=str,
+        )
+        self.assertQuerySetEqual(
+            published.past(later), ['Python meetup'],
+            transform=str,
+        )
+
+
+class PlacesLeftTests(TestCase):
+    """Places left, counted in the query each page runs."""
+
+    @classmethod
+    def setUpTestData(cls):
+        start = timezone.now() + timedelta(days=7)
+        cls.meetup = save_event(starts_at=start, capacity=2)
+        full = save_event(title='Django workshop',
+                          starts_at=start, capacity=1)
+        cls.ended = save_event(
+            title='Leeds social', capacity=5,
+            starts_at=start - timedelta(days=30),
+        )
+        sai = User.objects.create_user(
+            'sai@example.org', display_name='Sai'
+        )
+        raj = User.objects.create_user(
+            'raj@example.org', display_name='Raj'
+        )
+        Registration.objects.create(event=cls.meetup,
+                                    member=sai)
+        Registration.objects.create(
+            event=cls.meetup, member=raj,
+            status=Registration.Status.CANCELLED,
+            cancelled_at=start,
+        )
+        Registration.objects.create(event=full, member=sai)
+
+    def test_with_places_counts_active_places(self):
+        left = {event.title: event.places_left for event
+                in Event.objects.with_places()}
+        self.assertEqual(left, {'Python meetup': 1,
+                                'Django workshop': 0,
+                                'Leeds social': 5})
+
+    def test_pages_show_places_left(self):
+        with self.assertNumQueries(2):
+            response = self.client.get('/events/')
+        self.assertContains(
+            response, '<span class="places text-sm">'
+            '1 of 2 places left</span>', html=True,
+        )
+        self.assertContains(
+            response, '<span class="places badge">'
+            'Full</span>', html=True,
+        )
+        self.assertNotContains(response, 'of 5 places left')
+        with self.assertNumQueries(1):
+            response = self.client.get(
+                f'/events/{self.meetup.pk}/'
+            )
+        self.assertContains(response, '1 of 2 places left')
+
+    def test_an_ended_event_shows_no_places(self):
+        response = self.client.get(f'/events/{self.ended.pk}/')
+        self.assertContains(response, 'Leeds social')
+        self.assertNotContains(response, 'places left')
+        self.assertNotContains(response, 'class="places')
