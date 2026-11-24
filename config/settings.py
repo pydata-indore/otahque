@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import re
 from pathlib import Path
 
 from decouple import Csv, UndefinedValueError, config
@@ -40,6 +41,19 @@ DEBUG = config('DJANGO_DEBUG', default='') == 'True'
 ALLOWED_HOSTS = config(
     'DJANGO_ALLOWED_HOSTS', default='', cast=Csv()
 )
+
+# The admin site's path: admin/ locally, and a path that is
+# hard to guess in each deployment. It ends with /, holds only
+# plain path segments (Django would read <...> as a parameter),
+# and must not start with a path the public pages use.
+ADMIN_URL = config('DJANGO_ADMIN_URL', default='admin/')
+if (not re.fullmatch(r'(?:[A-Za-z0-9_-]+/)+', ADMIN_URL)
+        or ADMIN_URL.split('/')[0] in ('events', 'static')):
+    raise ImproperlyConfigured(
+        'DJANGO_ADMIN_URL must end with / and not start '
+        'with it, use only letters, digits, - and _, and '
+        'not begin with events/ or static/; see .env.example.'
+    )
 
 
 # Application definition
