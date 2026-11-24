@@ -411,11 +411,20 @@ def ask(messages):
 
 EDIT = re.compile(
     r'^FILE: *(?P<path>\S+)\n'
-    r'<<<<<<< SEARCH\n(?P<search>.*?)'
+    r'(?:<<<<<<< SEARCH\n(?P<search>.*?)'
     r'^=======\n(?P<replace>.*?)'
-    r'^>>>>>>> REPLACE$',
+    r'^>>>>>>> REPLACE$'
+    r'|<<<<<<< APPEND\n(?P<append>.*?)^>>>>>>> APPEND$)',
     re.M | re.S,
 )
+
+
+class PartialEdits(ValueError):
+    """Some files' edits were applied, others were not."""
+
+    def __init__(self, message, changed):
+        super().__init__(message)
+        self.changed = changed
 
 
 def blocked_reason(text):
@@ -424,27 +433,39 @@ def blocked_reason(text):
 
 
 def apply_edits(text, allowed):
-    """Apply every edit block, or none; return the paths changed.
+    """Apply each file's edit blocks, or none of that file's.
 
-    Each block is checked against an in-memory copy first, so a
-    bad block leaves every file as it was. Every bad block is
-    named, so one attempt can fix them all.
+    Each block is checked against an in-memory copy first. A
+    file with a bad block stays as it was, but the other files'
+    good edits are written, so one bad block no longer throws
+    away a whole attempt (#55). Every bad block is named. Raise
+    PartialEdits, listing what was written, if any file failed.
     """
     edits = list(EDIT.finditer(text))
     if not edits:
-        raise ValueError('No FILE/SEARCH/REPLACE blocks found.')
-    pending, errors = {}, []
+        raise ValueError(
+            'No FILE/SEARCH/REPLACE or APPEND blocks found.')
+    pending, errors, failed = {}, [], set()
     for edit in edits:
+        if edit['path'] in failed:
+            continue
         try:
             apply_one(edit, allowed, pending)
         except ValueError as error:
             errors.append(str(error))
-    if errors:
-        raise ValueError('\n'.join(errors))
+            failed.add(edit['path'])
+            pending.pop(edit['path'], None)
     for path, new in pending.items():
         target = ROOT / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(new, encoding='utf-8')
+    if errors and not pending:
+        raise ValueError('\n'.join(errors))
+    if errors:
+        written = ', '.join(sorted(pending))
+        raise PartialEdits(
+            '\n'.join(errors) + f'\nApplied anyway: {written}.',
+            list(pending))
     return list(pending)
 
 
@@ -466,6 +487,9 @@ def apply_one(edit, allowed, pending):
         old = target.read_text(encoding='utf-8')
     else:
         old = None
+    if edit['append'] is not None:
+        pending[path] = appended(path, old, edit['append'])
+        return
     search, replace = edit['search'], edit['replace']
     if not search.strip():
         # An empty file has nothing a SEARCH could match, so an
@@ -487,6 +511,20 @@ def apply_one(edit, allowed, pending):
         raise ValueError(
             search_problem(path, old, search, count))
     pending[path] = old.replace(search, replace)
+
+
+def appended(path, old, text):
+    """Return old with text added at the end.
+
+    Python gets the two blank lines PEP 8 puts before a
+    top-level class or function; other files get one.
+    """
+    text = text.strip('\n') + '\n'
+    base = (old or '').rstrip('\n')
+    if not base:
+        return text
+    gap = '\n\n\n' if path.endswith('.py') else '\n\n'
+    return base + gap + text
 
 
 def search_problem(path, old, search, count):
@@ -1094,8 +1132,17 @@ lines copied exactly from the current file
 the new lines
 >>>>>>> REPLACE
 
+To add lines at the end of a file, such as a new test class,
+use an APPEND block instead; it needs no SEARCH:
+
+FILE: events/tests.py
+<<<<<<< APPEND
+the new lines
+>>>>>>> APPEND
+
 Use several blocks for several changes. For a new file, leave
-SEARCH empty. Every SEARCH must match the file exactly once.
+SEARCH empty. Every SEARCH must match the file exactly once:
+copy it from the current file, never from the book reference.
 Keep every Python and template line at most 65 characters.
 If the ticket cannot be done without breaking a rule, answer
 with one line: BLOCKED: <the reason>.
@@ -1214,6 +1261,14 @@ def edit_loop(messages, allowed, verify, stage):
             raise Blocked(f'{stage}: the agent said: {reason}')
         try:
             changed = apply_edits(reply, allowed)
+        except PartialEdits as error:
+            feedback = (
+                'Some of your edits were applied and some were '
+                'not. The files under "Applied anyway" are '
+                'written; send blocks only for the rest, '
+                'copying SEARCH from them as they are now: '
+                f'{error}')
+            log(f'  - {feedback}')
         except ValueError as error:
             feedback = f'Your edits were not applied: {error}'
             log(f'  - {feedback}')

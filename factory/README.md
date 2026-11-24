@@ -29,7 +29,13 @@ the issue number.
    `docs/`, but not the tests. In the settings it may change
    only the settings the Runner section names (see "The ticket's
    Runner section").
-5. After every edit the script itself runs the checks: allowed
+5. The model edits with FILE/SEARCH/REPLACE blocks, or with an
+   APPEND block that adds lines at the end of a file (a new test
+   class) without quoting the file. Each file's blocks apply
+   together or not at all; a file with a bad block stays as it
+   was, while the other files' edits are kept and the model is
+   told which, so it resends only the rest.
+   After every edit the script itself runs the checks: allowed
    paths, the settings guard, at most 65 characters per line,
    then `makemigrations` if the ticket asks for it,
    `manage.py check`, and `manage.py test` (every app). If a
@@ -288,8 +294,9 @@ The runner's own tests are not part of the book, so
 python -m unittest factory/test_agent_runner.py
 ```
 
-They cover how edits are applied (every block or none, and a
-clear error for a missing file), the paths built from the
+They cover how edits are applied (each file's blocks or none
+of that file's, APPEND blocks, and a clear error for a missing
+file), the paths built from the
 layout, the Runner section, the settings guard, and the
 migration step.
 
