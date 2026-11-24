@@ -1632,11 +1632,18 @@ def main():
     rechecked = None
     if ok and changed:
         # The fixes changed the code the criteria were judged on.
-        rechecked = accept(issue, after_report, red)
-        unmet = [str(c['n']) for c in rechecked['criteria']
-                 if not c['met']]
-        if unmet:
-            problem = 'criteria ' + ', '.join(unmet) + ' failed'
+        try:
+            rechecked = accept(issue, after_report, red)
+        except Blocked as why:
+            rechecked = None
+            problem = ('the criteria could not be '
+                       f'rechecked ({why})')
+        else:
+            unmet = [str(c['n']) for c in rechecked['criteria']
+                     if not c['met']]
+            if unmet:
+                problem = ('criteria ' + ', '.join(unmet)
+                           + ' failed')
     if problem and before_local:
         # Advisory: undo every local fix, keep the checked code.
         restore(before_local)
@@ -1916,7 +1923,7 @@ class QodoUnavailable(Exception):
     """The Qodo CLI cannot be used for this run."""
 
 
-def qodo(*args, timeout=120):
+def qodo(*args, cwd, timeout=120):
     """Run the pinned Qodo CLI; return (code, stdout, stderr).
 
     It gets the Qodo key and no GitHub token. Its hash is
@@ -1943,7 +1950,7 @@ def qodo(*args, timeout=120):
                QODO_NO_KEYCHAIN='1')
     try:
         done = subprocess.run(
-            ['node', cli, *args], cwd=ROOT, env=env,
+            ['node', cli, *args], cwd=cwd, env=env,
             capture_output=True, text=True, timeout=timeout,
             encoding='utf-8', errors='replace')
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -1960,9 +1967,51 @@ def qodo_json(text):
     return data if isinstance(data, dict) else None
 
 
+def private_copy():
+    """Copy the working tree to a folder only the runner opens.
+
+    The sandbox user can write the checkout, so files there
+    (such as .qodo/session-context.json, which the CLI reads by
+    itself) must never reach a CLI that holds the Qodo key.
+    Return (folder, copy of the repository).
+    """
+    tree = snapshot()
+    if not tree:
+        raise QodoUnavailable('the working tree could not be '
+                              'recorded')
+    try:
+        folder = Path(tempfile.mkdtemp(prefix='qodo-'))
+    except OSError as error:
+        raise QodoUnavailable(f'no private folder: {error!r}')
+    copy = folder / 'repo'
+    git = ['git', '-c', 'core.hooksPath=/dev/null']
+    for args in (
+            ['clone', '-q', '--no-checkout', '--shared',
+             str(ROOT), str(copy)],
+            ['-C', str(copy), 'read-tree', '-u', '--reset',
+             tree],
+            ['-C', str(copy), 'reset', '-q'],
+            ['-C', str(copy), 'remote', 'set-url', 'origin',
+             f'https://github.com/{REPO}.git']):
+        code, out = run(git + args)
+        if code:
+            raise QodoUnavailable('the private copy failed: '
+                                  + tail(out, 5))
+    return folder, copy
+
+
 def run_local_review(issue, round_):
     """Review the uncommitted change; return Qodo's result."""
     url = f'https://github.com/{REPO}/issues/{ISSUE}'
+    # 4. One deadline for the whole step, every call inside it.
+    deadline = min(time.time() + LOCAL_WAIT, RUN_DEADLINE)
+
+    def left():
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise QodoUnavailable('the review did not finish in '
+                                  'time')
+        return remaining
     context = {
         'notes': (f'Written by the agent runner for #{ISSUE}. '
                   'The checks pass on this working tree: '
@@ -1972,10 +2021,8 @@ def run_local_review(issue, round_):
                         'change for the ticket.'],
         'context_refs': [{'kind': 'ticket', 'url': url}],
     }
-    # A private folder: the sandbox user could otherwise create
-    # a fixed /tmp path first and block the write.
+    folder, copy = private_copy()
     try:
-        folder = Path(tempfile.mkdtemp(prefix='qodo-'))
         path = folder / 'context.json'
         path.write_text(json.dumps(context), encoding='utf-8')
     except OSError as error:
@@ -1984,23 +2031,22 @@ def run_local_review(issue, round_):
     code, out, err = qodo(
         'review', '--base', BASE, '--ticket', url,
         '--context-file', str(path), '--async', '--json',
-        timeout=300)
+        cwd=copy, timeout=min(300, left()))
     started = qodo_json(out) or {}
     operation = started.get('operation_id')
     if code or not isinstance(operation, str):
         raise QodoUnavailable('the review was not accepted: '
                               + tail(err or out, 5))
-    deadline = min(time.time() + LOCAL_WAIT, RUN_DEADLINE)
-    while time.time() < deadline:
+    while True:
         code, out, err = qodo('review', 'status', operation,
-                              '--json')
+                              '--json', cwd=copy,
+                              timeout=min(120, left()))
         if code == 0:
             return qodo_json(out)
         if code != 2:
             raise QodoUnavailable('the review failed: '
                                   + tail(err or out, 5))
-        time.sleep(20)
-    raise QodoUnavailable('the review did not finish in time')
+        time.sleep(min(20, left()))
 
 
 def local_findings(result):
@@ -2021,11 +2067,18 @@ def local_findings(result):
             and state.get('complete') is True):
         return None
     lists = [state.get('introduced'), state.get('still_open')]
-    if not all(isinstance(x, list) for x in lists):
+    if not all(isinstance(x, list)
+               and all(isinstance(i, str) for i in x)
+               for x in lists):
         return None
     open_ids = set(lists[0]) | set(lists[1])
     findings = result.get('findings')
     if not isinstance(findings, list):
+        return None
+    recorded = {f.get('id') for f in findings
+                if isinstance(f, dict)
+                and isinstance(f.get('id'), str)}
+    if not open_ids <= recorded:
         return None
     found = []
     for f in findings:
@@ -2075,11 +2128,21 @@ def snapshot():
 
 
 def restore(tree):
-    """Put the working tree back as snapshot() recorded it."""
-    run(['git', 'read-tree', '-u', '--reset', tree])
-    run(['git', 'clean', '-fdq', '--', '.',
-         ':!factory-log.md'])
-    run(['git', 'reset', '-q'])
+    """Put the working tree back as snapshot() recorded it.
+
+    If git fails, the tree is in an unknown state, so the run
+    stops rather than commit code a rollback said it removed.
+    """
+    for args in (['git', 'read-tree', '-u', '--reset', tree],
+                 ['git', 'clean', '-fdq', '--', '.',
+                  ':!factory-log.md'],
+                 ['git', 'reset', '-q']):
+        code, out = run(args)
+        if code:
+            raise Blocked('Undoing the local review fixes '
+                          'failed ('
+                          + ' '.join(args[1:3]) + '):\n'
+                          + fence(tail(out)))
 
 
 def local_section(rows, low, note):

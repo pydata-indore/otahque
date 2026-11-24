@@ -216,6 +216,10 @@ together, in both jobs, in a reviewed PR.
 Before its first commit, the runner reviews its own change the
 way a person does locally: `qodo review --base <main's commit>
 --ticket <issue> --async`, collected with `qodo review status`.
+It runs on a private copy of the working tree, in a folder only
+the runner can open, because the CLI holds the Qodo key and reads
+files such as `.qodo/session-context.json` by itself, and the
+sandbox user can write the checkout.
 Qodo's levels are read as the gate's severities:
 `action_required` is High, `remediation_recommended` is Medium,
 `informational` is Low, and an unknown level counts as High.

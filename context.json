@@ -1,0 +1,1 @@
+{"notes": "Written by the agent runner for #0. The checks pass on this working tree: manage.py check, test, makemigrations --check, and the 65-character limit.", "recent_work": ["Local review round 1 of the change for the ticket."], "context_refs": [{"kind": "ticket", "url": "https://github.com/example/example/issues/0"}]}
