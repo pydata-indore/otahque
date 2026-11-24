@@ -7,6 +7,7 @@ python -m unittest factory/test_agent_runner.py
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1782,8 +1783,13 @@ class LocalFindingsTests(unittest.TestCase):
                     if k != 'finding_state'}
         odd = json.loads(json.dumps(LOCAL_47))
         odd['meta'] = 'complete'
+        missing = json.loads(json.dumps(LOCAL_47))
+        missing['findings'] = missing['findings'][:2]
+        unhashable = json.loads(json.dumps(LOCAL_47))
+        unhashable['finding_state']['introduced'] = [{'id': 1}]
         for result in (partial, unfinished, no_state, odd, None,
-                       [], {'findings': [None]}):
+                       [], {'findings': [None]}, missing,
+                       unhashable):
             with self.subTest(result=result):
                 self.assertIsNone(
                     agent_runner.local_findings(result))
@@ -1948,6 +1954,71 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(agent_runner.snapshot(), 'b' * 40)
 
 
+class RestoreTests(unittest.TestCase):
+    """A rollback that fails stops the run."""
+
+    def test_a_failed_git_step_raises(self):
+        self.addCleanup(setattr, agent_runner, 'run',
+                        agent_runner.run)
+        agent_runner.run = lambda args, env=None: (
+            (1, 'fatal: bad tree') if 'read-tree' in args
+            else (0, ''))
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'bad tree'):
+            agent_runner.restore('a' * 40)
+
+
+class PrivateCopyTests(unittest.TestCase):
+    """Qodo reviews a copy the sandbox user cannot reach."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(setattr, agent_runner, 'ROOT',
+                        agent_runner.ROOT)
+        agent_runner.ROOT = root = Path(folder.name)
+        run = agent_runner.run
+        run(['git', 'init', '-q'])
+        (root / 'kept.py').write_text('one\n')
+        run(['git', 'add', '.'])
+        run(['git', '-c', 'user.name=t', '-c',
+             'user.email=t@e.x', 'commit', '-qm', 'base'])
+        (root / 'kept.py').write_text('two\n')
+        (root / 'new.py').write_text('new\n')
+        (root / '.qodo').mkdir()
+        (root / '.qodo' / 'session-context.json').write_text(
+            '{"notes": "planted"}')
+
+    def test_copy_has_the_change_but_not_untracked_extras(self):
+        folder, copy = agent_runner.private_copy()
+        self.addCleanup(shutil.rmtree, folder, True)
+        self.assertEqual((copy / 'kept.py').read_text(), 'two\n')
+        self.assertTrue((copy / 'new.py').exists())
+        self.assertNotEqual(copy.resolve(),
+                            agent_runner.ROOT.resolve())
+        code, url = agent_runner.run(
+            ['git', '-C', str(copy), 'remote', 'get-url',
+             'origin'])
+        self.assertIn('github.com', url)
+
+
+class DeadlineTests(unittest.TestCase):
+    """The local review never runs past the run's limit."""
+
+    def test_no_time_left_stops_before_any_call(self):
+        calls = []
+        for name, value in {
+                'RUN_DEADLINE': 0,
+                'private_copy': lambda: (Path('.'), Path('.')),
+                'qodo': lambda *a, **k: calls.append(a)}.items():
+            self.addCleanup(setattr, agent_runner, name,
+                            getattr(agent_runner, name))
+            setattr(agent_runner, name, value)
+        with self.assertRaises(agent_runner.QodoUnavailable):
+            agent_runner.run_local_review({'body': 'T'}, 1)
+        self.assertEqual(calls, [])
+
+
 class LocalCliTests(unittest.TestCase):
     """The local review never runs a changed CLI."""
 
@@ -1971,13 +2042,13 @@ class LocalCliTests(unittest.TestCase):
     def test_changed_cli_is_refused(self):
         self.cli.write_text('changed', encoding='utf-8')
         with self.assertRaises(agent_runner.QodoUnavailable):
-            agent_runner.qodo('review', 'status', 'x')
+            agent_runner.qodo('review', 'status', 'x', cwd='.')
         self.assertEqual(self.calls, [])
 
     def test_no_key_is_refused(self):
         os.environ['QODO_API_KEY'] = ''
         with self.assertRaises(agent_runner.QodoUnavailable):
-            agent_runner.qodo('review', 'status', 'x')
+            agent_runner.qodo('review', 'status', 'x', cwd='.')
 
 if __name__ == '__main__':
     unittest.main()
