@@ -514,17 +514,31 @@ def apply_one(edit, allowed, pending):
     else:
         old = None
     if edit['append'] is not None:
-        pending[path] = appended(
-            path, old, unlabel(path, edit['append']))
+        text = unlabel(path, edit['append'])
+        if not text.strip():
+            raise ValueError(
+                f'The APPEND block for {path} holds only a '
+                'label; send the lines to add.')
+        pending[path] = appended(path, old, text)
         return
     search = unlabel(path, edit['search'])
     replace = unlabel(path, edit['replace'])
-    if (edit['search'].strip() and not search.strip()
-            and old is not None and old.strip()):
-        # The SEARCH held only a label copied from the
-        # reference: the model meant to add at the end (#55).
-        pending[path] = appended(path, old, replace)
-        return
+    if edit['search'].strip() and not search.strip():
+        # Only a reference label that says "add at the end" means
+        # an append (#55, run 3); a file heading copied from the
+        # current files is a mistake to report, not to guess.
+        if 'add at the end' not in edit['search'].lower():
+            raise ValueError(
+                f'The SEARCH for {path} holds only a label, '
+                'which is not file text. To add lines at the '
+                'end, send an APPEND block.')
+        if not replace.strip():
+            raise ValueError(
+                f'The block for {path} holds only labels; send '
+                'the lines to add.')
+        if old is not None and old.strip():
+            pending[path] = appended(path, old, replace)
+            return
     if not search.strip():
         # An empty file has nothing a SEARCH could match, so an
         # empty SEARCH may fill it, as for a new file.
