@@ -447,14 +447,16 @@ def apply_edits(text, allowed):
             'No FILE/SEARCH/REPLACE or APPEND blocks found.')
     pending, errors, failed = {}, [], set()
     for edit in edits:
-        if edit['path'] in failed:
-            continue
+        # A failed block leaves its file's pending text as it
+        # was, so the file's later blocks are still checked and
+        # every problem is named in one attempt.
         try:
             apply_one(edit, allowed, pending)
         except ValueError as error:
             errors.append(str(error))
             failed.add(edit['path'])
-            pending.pop(edit['path'], None)
+    for path in failed:
+        pending.pop(path, None)
     for path, new in pending.items():
         target = ROOT / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -469,9 +471,33 @@ def apply_edits(text, allowed):
     return list(pending)
 
 
+def linked(path):
+    """Say why a write to path would leave the checkout, or None.
+
+    Generated code runs as the sandbox user and could replace an
+    allowed file, or a folder above it, with a symlink to a file
+    the runner protects; the runner must not follow it.
+    """
+    current = ROOT
+    for part in Path(path).parts:
+        current = current / part
+        if current.is_symlink():
+            return (f'{path} goes through a symlink '
+                    f'({current.relative_to(ROOT)}); it is not '
+                    'written.')
+    try:
+        (ROOT / path).resolve().relative_to(ROOT.resolve())
+    except ValueError:
+        return f'{path} is outside the checkout.'
+    return None
+
+
 def apply_one(edit, allowed, pending):
     """Check one edit block and add its result to pending."""
     path = edit['path']
+    problem = linked(path)
+    if problem:
+        raise ValueError(problem)
     if not allowed(path):
         if '/migrations/' in path:
             raise ValueError(f'{path} is a migration. ' + (
@@ -523,6 +549,9 @@ def appended(path, old, text):
     base = (old or '').rstrip('\n')
     if not base:
         return text
+    # A retry may resend a block written on an earlier attempt.
+    if base.endswith(text.rstrip('\n')):
+        return old
     gap = '\n\n\n' if path.endswith('.py') else '\n\n'
     return base + gap + text
 
