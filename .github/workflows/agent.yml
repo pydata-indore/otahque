@@ -53,6 +53,34 @@ jobs:
             echo "DJANGO_ALLOWED_HOSTS="
           } > .env
 
+      # Generated code runs as this user and cannot read the
+      # job's secrets (factory/README.md, "The sandbox user").
+      - name: Create the sandbox user for generated code
+        run: |
+          user=otahque-sandbox
+          sudo useradd --create-home --shell /bin/sh "$user"
+          python_dir=$(uv python dir)
+          # It must reach the checkout and uv's Python.
+          for dir in "$GITHUB_WORKSPACE" "$python_dir"; do
+            p="$dir"
+            while [ "$p" != / ]; do
+              sudo chmod o+x "$p"
+              p=$(dirname "$p")
+            done
+          done
+          if [ -d "$python_dir" ]; then
+            chmod -R a+rX "$python_dir"
+          fi
+          chmod -R a+rwX "$GITHUB_WORKSPACE"
+          # Sticky, as /tmp is: it may add files at the top level
+          # (startapp) but not rename or remove the runner's.
+          chmod +t "$GITHUB_WORKSPACE"
+          # The runner's own code and Git data are out of reach;
+          # .venv stays readable so its Python can start.
+          chmod -R go-rwx .git factory .github
+          chmod -R go-w .venv
+          echo "SANDBOX_USER=$user" >> "$GITHUB_ENV"
+
       - name: Run the agent
         id: run
         env:

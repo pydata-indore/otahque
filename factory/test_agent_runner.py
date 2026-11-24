@@ -7,6 +7,7 @@ python -m unittest factory/test_agent_runner.py
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1583,6 +1584,131 @@ class HandoffTests(unittest.TestCase):
             agent_runner.finish(44, [], [], False, 'Open High.',
                                 REWRAP, REWRAP)
         self.assertFalse(self.output.exists())
+
+
+class SandboxTests(unittest.TestCase):
+    """Generated code runs as a user who cannot see secrets."""
+
+    def setUp(self):
+        self.calls = []
+        self.addCleanup(setattr, agent_runner, 'run',
+                        agent_runner.run)
+        agent_runner.run = (
+            lambda args, env=None: self.calls.append(args)
+            or (0, ''))
+        for name in ('SANDBOX_USER', 'GITHUB_ACTIONS'):
+            self.addCleanup(os.environ.pop, name, None)
+            os.environ.pop(name, None)
+
+    def test_manage_runs_as_the_sandbox_user(self):
+        os.environ['SANDBOX_USER'] = 'otahque-sandbox'
+        os.environ['EURI_API_KEY'] = 'secret-value'
+        self.addCleanup(os.environ.pop, 'EURI_API_KEY', None)
+        agent_runner.manage('test')
+        args = self.calls[-1]
+        self.assertEqual(args[:5], ['sudo', '-n', '-u',
+                                    'otahque-sandbox', '--'])
+        self.assertIn('env', args)
+        self.assertIn('-i', args)
+        self.assertEqual(args[-2:], ['manage.py', 'test'])
+        self.assertNotIn('secret-value', ' '.join(args))
+        self.assertIn('umask 000', ' '.join(args))
+
+    def test_manage_runs_directly_outside_actions(self):
+        agent_runner.manage('check')
+        self.assertEqual(self.calls[-1],
+                         ['uv', 'run', 'python', 'manage.py',
+                          'check'])
+
+    def test_actions_without_a_sandbox_user_stops(self):
+        os.environ['GITHUB_ACTIONS'] = 'true'
+        self.assertIn('SANDBOX_USER',
+                      agent_runner.sandbox_problem())
+        os.environ['SANDBOX_USER'] = 'otahque-sandbox'
+        self.assertIsNone(agent_runner.sandbox_problem())
+
+    def test_outside_actions_needs_no_sandbox(self):
+        self.assertIsNone(agent_runner.sandbox_problem())
+
+
+class PushTests(unittest.TestCase):
+    """The token never appears in a command line."""
+
+    def setUp(self):
+        self.calls = []
+        self.addCleanup(setattr, agent_runner.subprocess, 'run',
+                        agent_runner.subprocess.run)
+        agent_runner.subprocess.run = self.fake_run
+        self.addCleanup(setattr, agent_runner, 'guard_git',
+                        agent_runner.guard_git)
+        agent_runner.guard_git = lambda: None
+        self.addCleanup(os.environ.pop, 'GH_TOKEN', None)
+        os.environ['GH_TOKEN'] = 'ghs_secret'
+
+    def fake_run(self, args, **kwargs):
+        self.calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args, self.code, '', 'denied for ghs_secret')
+
+    def test_push_keeps_the_token_out_of_the_arguments(self):
+        self.code = 0
+        agent_runner.push('ch21-x')
+        args, kwargs = self.calls[-1]
+        self.assertNotIn('ghs_secret', ' '.join(args))
+        self.assertEqual(kwargs['env']['GIT_PUSH_TOKEN'],
+                         'ghs_secret')
+
+    def test_a_failed_push_hides_the_token(self):
+        self.code = 1
+        with self.assertRaises(agent_runner.Blocked) as caught:
+            agent_runner.push('ch21-x')
+        self.assertNotIn('ghs_secret', str(caught.exception))
+
+
+class CommitPathTests(unittest.TestCase):
+    """Nothing outside the run's paths reaches a commit."""
+
+    def setUp(self):
+        use_layout(self)
+        self.calls = []
+        for name, value in {
+                'guard_git': lambda: None,
+                'run': lambda args, env=None:
+                    self.calls.append(args) or (0, 'abc1234'),
+                }.items():
+            self.addCleanup(setattr, agent_runner, name,
+                            getattr(agent_runner, name))
+            setattr(agent_runner, name, value)
+        self.addCleanup(setattr, agent_runner, 'changed_paths',
+                        agent_runner.changed_paths)
+
+    def changed(self, *paths):
+        agent_runner.changed_paths = lambda: list(paths)
+
+    def test_a_file_changed_outside_the_paths_stops(self):
+        self.changed('events/models.py',
+                     'factory/agent_runner.py')
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'factory/agent_runner.py'):
+            agent_runner.commit('Chapter 22: queries')
+        self.assertEqual(self.calls, [])
+
+    def test_settings_changed_beyond_the_ticket_stops(self):
+        self.changed('config/settings.py')
+        self.addCleanup(setattr, agent_runner,
+                        'settings_problems',
+                        agent_runner.settings_problems)
+        agent_runner.settings_problems = lambda: ['DEBUG']
+        with self.assertRaisesRegex(agent_runner.Blocked,
+                                    'DEBUG'):
+            agent_runner.commit('Chapter 22')
+        self.assertEqual(self.calls, [])
+
+    def test_allowed_files_are_committed(self):
+        self.changed('events/models.py', 'events/tests.py')
+        self.assertEqual(agent_runner.commit('Chapter 22'),
+                         'abc1234')
+        self.assertIn('commit', self.calls[-2])
 
 if __name__ == '__main__':
     unittest.main()

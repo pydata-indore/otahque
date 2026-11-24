@@ -204,6 +204,33 @@ never run, and auto-update is off. The CLI gets the Qodo key and
 no GitHub token. To move the pin, change `QODO_VERSION` and
 `QODO_SHA256` together in a reviewed PR.
 
+## The sandbox user
+
+Every `manage.py` command runs the code the model wrote, so in
+Actions the runner runs them as a separate user,
+`otahque-sandbox`, which `agent.yml` creates. The runner holds
+`EURI_API_KEY` and the GitHub token in its environment, and any
+process of the same user can read that through
+`/proc/<pid>/environ`; a different user cannot. The commands
+start through `sudo -n -u otahque-sandbox` with an empty
+environment and the checkout's `.venv` Python. Without
+`SANDBOX_USER`, a run in Actions stops at the start.
+
+The sandbox user can write the checkout but cannot read or
+write `.git/`, `factory/` or `.github/`, and can only read
+`.venv/`. The checkout's top folder is sticky, like `/tmp`: the
+sandbox can add a new app there but cannot rename or remove the
+runner's folders to swap in its own. Before every commit the
+runner checks the changed paths again, since the generated code
+ran after the last check, and stops if anything outside the
+allowed paths changed. `git push`
+gets the token from a credential helper that reads it from the
+push's own environment, because any user can read a process's
+command line. The sandbox can still reach the network; it holds
+nothing secret to send. `checks.yml` runs the Django checks as
+the same user and checks that it cannot read the job's
+environment, so every pull request shows the sandbox works.
+
 ## Checks on every pull request
 
 [`checks.yml`](../.github/workflows/checks.yml) runs on every pull
@@ -244,8 +271,9 @@ Under Settings, Secrets and variables, Actions:
 
 Without `AGENT_GH_TOKEN`, the run stops at the start with that
 reason: a PR from `github-actions[bot]` would never start the
-required checks, and Qodo would not review it. The checks run without any token or key
-in their environment, and the checkout keeps no credentials.
+required checks, and Qodo would not review it. The checks run
+without any token or key in their environment, and the checkout
+keeps no credentials.
 Git runs with hooks turned off, and the run refuses to commit
 or push if `.git/config` or `.git/hooks` changed while the
 generated code ran.
