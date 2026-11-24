@@ -1,5 +1,6 @@
 """The events app's views: one function per page."""
 from django.shortcuts import get_object_or_404, render
+from django.utils import timezone
 
 from .models import Event
 
@@ -10,20 +11,22 @@ def home(request):
 
 
 def event_list(request):
-    """List the published events."""
-    events = Event.objects.filter(
-        status=Event.Status.PUBLISHED
-    )
-    return render(
-        request, 'events/list.html', {'events': events}
-    )
+    """List upcoming published events, then past ones."""
+    now = timezone.now()
+    events = Event.objects.published().with_places()
+    return render(request, 'events/list.html', {
+        'upcoming': events.upcoming(now),
+        'past': events.past(now),
+        'now': now,
+    })
 
 
 def event_detail(request, event_id):
     """Show one published event, or 404."""
     event = get_object_or_404(
-        Event, pk=event_id, status=Event.Status.PUBLISHED
+        Event.objects.published().with_places(), pk=event_id
     )
-    return render(
-        request, 'events/detail.html', {'event': event}
-    )
+    return render(request, 'events/detail.html', {
+        'event': event,
+        'now': timezone.now(),
+    })

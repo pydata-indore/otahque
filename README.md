@@ -27,7 +27,8 @@ going through a pull request and a Qodo review before it reaches the book.
 | Models, users, migrations, ORM, admin | 19 | Written during the hackathon; chapter drafted |
 | Relationships between models | 20 | Written during the hackathon; chapter drafted |
 | Validation, constraints, data integrity | 21 | Written during the hackathon; chapter drafted |
-| Models, users, migrations, ORM, admin | 22 to 23 | Planned |
+| QuerySets, managers, query composition | 22 | Written during the hackathon; chapter drafted |
+| Models, users, migrations, ORM, admin | 23 | Planned |
 | Forms, accounts, permissions, registration | 24 to 34 | Planned |
 
 The full 75-chapter contents are on the book site. The `Event` model,

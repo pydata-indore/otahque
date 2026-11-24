@@ -17,6 +17,36 @@ def validate_timezone_name(value):
         )
 
 
+class EventQuerySet(models.QuerySet):
+    """Named questions about events."""
+
+    def published(self):
+        """Return the events that visitors may see."""
+        return self.filter(status=Event.Status.PUBLISHED)
+
+    def upcoming(self, now):
+        """Return events not yet ended at now, soonest first."""
+        return self.filter(ends_at__gt=now).order_by(
+            'starts_at'
+        )
+
+    def past(self, now):
+        """Return events ended by now, the latest first."""
+        return self.filter(ends_at__lte=now).order_by(
+            '-ends_at'
+        )
+
+    def with_places(self):
+        """Add places_left: capacity minus active places."""
+        taken = models.Count(
+            'registrations',
+            filter=models.Q(registrations__status='active'),
+        )
+        return self.annotate(
+            places_left=models.F('capacity') - taken
+        )
+
+
 class Event(models.Model):
     """A proposed Otahque event, from the Chapter 15 ERD."""
 
@@ -40,6 +70,8 @@ class Event(models.Model):
         choices=Status,
         default=Status.DRAFT,
     )
+
+    objects = EventQuerySet.as_manager()
 
     class Meta:
         ordering = ['starts_at']

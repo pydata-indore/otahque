@@ -4,6 +4,14 @@ from django.db import models
 from django.utils import timezone
 
 
+class RegistrationQuerySet(models.QuerySet):
+    """Named questions about registrations."""
+
+    def active(self):
+        """Return the places that members currently hold."""
+        return self.filter(status=Registration.Status.ACTIVE)
+
+
 class Registration(models.Model):
     """A member's place in an event, from the ERD."""
 
@@ -34,6 +42,8 @@ class Registration(models.Model):
     cancelled_at = models.DateTimeField(
         null=True, blank=True
     )
+
+    objects = RegistrationQuerySet.as_manager()
 
     class Meta:
         ordering = ['registered_at']
