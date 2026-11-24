@@ -5,7 +5,7 @@ at a time. Reviewers and agents use this page to judge a change
 against its chapter: what that chapter teaches, what earlier
 chapters already print, and which later chapter fills a gap.
 
-- The published book: https://otahque.tech. Chapters 6 to 23 are
+- The published book: https://otahque.tech. Chapters 6 to 35 are
   online; each page prints the files that chapter changes.
 - The chapter a pull request belongs to is in its title
   ("Chapter 23: ...") and its ticket.
@@ -43,18 +43,18 @@ chapters already print, and which later chapter fills a gap.
 | 21 | Validation, constraints, and data integrity | https://otahque.tech/chapters/chapter21/ |
 | 22 | QuerySets, managers, and query composition | https://otahque.tech/chapters/chapter22/ |
 | 23 | Django admin fundamentals | https://otahque.tech/chapters/chapter23/ |
-| 24 | Django forms | Planned |
-| 25 | Editing an event, and the validation lifecycle | Planned |
-| 26 | Publishing, cancelling, and deleting an event | Planned |
-| 27 | Authentication and account workflows | Planned |
-| 28 | Sessions, cookies, and time zones | Planned |
-| 29 | Account security: passwords, sign-in codes, and two factors | Planned |
-| 30 | Permissions, ownership, and roles | Planned |
-| 31 | Event registration and cancellation | Planned |
-| 32 | Moving to PostgreSQL | Planned |
-| 33 | Transactions, concurrency, and the last available seat | Planned |
-| 34 | Testing fundamentals and first-release acceptance | Planned |
-| 35 | Class-based views and dispatch | Planned |
+| 24 | Django forms | https://otahque.tech/chapters/chapter24/ |
+| 25 | Editing an event, and the validation lifecycle | https://otahque.tech/chapters/chapter25/ |
+| 26 | Publishing, cancelling, and deleting an event | https://otahque.tech/chapters/chapter26/ |
+| 27 | Authentication and account workflows | https://otahque.tech/chapters/chapter27/ |
+| 28 | Sessions, cookies, and time zones | https://otahque.tech/chapters/chapter28/ |
+| 29 | Account security: passwords, sign-in codes, and two factors | https://otahque.tech/chapters/chapter29/ |
+| 30 | Permissions, ownership, and roles | https://otahque.tech/chapters/chapter30/ |
+| 31 | Event registration and cancellation | https://otahque.tech/chapters/chapter31/ |
+| 32 | Moving to PostgreSQL | https://otahque.tech/chapters/chapter32/ |
+| 33 | Transactions, concurrency, and the last available seat | https://otahque.tech/chapters/chapter33/ |
+| 34 | Testing fundamentals and first-release acceptance | https://otahque.tech/chapters/chapter34/ |
+| 35 | Class-based views and dispatch | https://otahque.tech/chapters/chapter35/ |
 | 36 | Generic display views and pagination | Planned |
 | 37 | Generic editing views and access mixins | Planned |
 | 38 | Advanced admin and formsets | Planned |
