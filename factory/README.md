@@ -45,10 +45,14 @@ the issue number.
 6. A separate model call checks each acceptance criterion
    against the diff and the check output. Unmet criteria go
    back to the code step once.
-7. One commit, a pushed branch, and a PR that closes the issue,
-   with the failing-test output, the criteria table, and the
-   checks.
-8. It waits for Qodo's review of the PR's head commit on GitHub
+7. A Qodo local review of the uncommitted change, before the
+   first commit (see "The local Qodo review"). Confirmed High
+   or Medium findings are fixed and the change is reviewed
+   again; disputed ones and Lows are listed for a human.
+8. One commit, a pushed branch, and a PR that closes the issue,
+   with the failing-test output, the criteria table, the
+   checks, and the local review.
+9. It waits for Qodo's review of the PR's head commit on GitHub
    (the review comment names the commit it covers) and applies
    the quality gate in `AGENTS.md`. It reads every open finding
    from the review comment: its severity group, type, and file.
@@ -58,7 +62,7 @@ the issue number.
    commit, the checks run, and it posts `/agentic_review` for
    the next round. Low findings are never changed. A finding
    whose severity it cannot read counts as High.
-9. The run ends with a gate report on the PR: every High or
+10. The run ends with a gate report on the PR: every High or
    Medium finding with its type, severity and verdict, the Low
    findings flagged for a human, and the reviewed commit against
    the PR head. "Gate met" only when no High or Medium finding is
@@ -193,16 +197,39 @@ met": the job comments on the PR, labels the issue
 
 `confirm` runs on a fresh machine with code from `main`. Nothing
 from the PR is executed there, only `git diff` on its commits.
-That is why the Qodo key lives only in that job: the agent job
-runs generated code, which could read any secret on its machine.
+The agent job also holds the Qodo key, for its local review,
+but there the generated code runs as the sandbox user (see "The
+sandbox user"), which cannot read the runner's environment.
 
-The CLI is pinned. The job downloads one release,
+The CLI is pinned, the same way in both jobs. Each downloads
+one release,
 `https://get.qodo.ai/releases/<version>/qodo.mjs`, and refuses it
 unless its SHA-256 matches the hash Qodo publishes for that release
 (`releases/<version>/release.json`). Qodo's installer script is
 never run, and auto-update is off. The CLI gets the Qodo key and
-no GitHub token. To move the pin, change `QODO_VERSION` and
-`QODO_SHA256` together in a reviewed PR.
+no GitHub token, and the runner checks its hash again before each
+call. To move the pin, change `QODO_VERSION` and `QODO_SHA256`
+together, in both jobs, in a reviewed PR.
+
+## The local Qodo review
+
+Before its first commit, the runner reviews its own change the
+way a person does locally: `qodo review --base <main's commit>
+--ticket <issue> --async`, collected with `qodo review status`.
+Qodo's levels are read as the gate's severities:
+`action_required` is High, `remediation_recommended` is Medium,
+`informational` is Low, and an unknown level counts as High.
+High and Medium findings go through the same triage as the PR
+review, judged against the working-tree diff. Confirmed ones are
+fixed with the usual checks, then the change is reviewed again,
+for up to `LOCAL_REVIEW_ROUNDS` rounds (2). Lows are never
+changed. The PR description lists every finding, its verdict,
+and anything left open or disputed for a human.
+
+The local review helps; it does not decide. If it cannot run
+(no key, a CLI that fails its hash, an error, a timeout, or
+incomplete coverage), the run says so in the PR and carries on.
+The PR review and the `confirm` job are still the gate.
 
 ## The sandbox user
 
@@ -266,7 +293,7 @@ Under Settings, Secrets and variables, Actions:
 | Variable | `EURI_MODEL` | Model name |
 | Variable | `EURI_BASE_URL` | OpenAI-compatible base URL |
 | Secret | `AGENT_GH_TOKEN` | Token for the PR and comments; the run stops without it |
-| Secret | `QODO_API_KEY` | Qodo key, used only by the `confirm` job; without it the gate is never confirmed |
+| Secret | `QODO_API_KEY` | Qodo key for the local review and the `confirm` job; without it the gate is never confirmed |
 | Variable | `QODO_BASE_URL` | Qodo API address, `https://sdk.qodo.ai` |
 
 Without `AGENT_GH_TOKEN`, the run stops at the start with that

@@ -53,6 +53,31 @@ jobs:
             echo "DJANGO_ALLOWED_HOSTS="
           } > .env
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.13.0
+
+      # The runner's local Qodo review (factory/README.md). The
+      # same pin as the confirm job; move both together. A failed
+      # download only means no local review: the runner says so
+      # in the PR, and the PR review is still the gate.
+      - name: Install the Qodo CLI (pinned)
+        continue-on-error: true
+        env:
+          QODO_VERSION: 2.6.0
+          QODO_SHA256: >-
+            0eb4df6a511cb7e170dc3ff8caee751623ccb1a1770157cf7bad96715f509d29
+        run: |
+          cli="$RUNNER_TEMP/qodo/qodo.mjs"
+          mkdir -p "$(dirname "$cli")"
+          url="https://get.qodo.ai/releases/$QODO_VERSION/qodo.mjs"
+          curl -fsSL -o "$cli" "$url"
+          echo "$QODO_SHA256  $cli" | sha256sum -c -
+          # The sandbox user may read it, never change it.
+          chmod -R go-w "$(dirname "$cli")"
+          echo "QODO_CLI_JS=$cli" >> "$GITHUB_ENV"
+          echo "QODO_SHA256=$QODO_SHA256" >> "$GITHUB_ENV"
+
       # Generated code runs as this user and cannot read the
       # job's secrets (factory/README.md, "The sandbox user").
       - name: Create the sandbox user for generated code
@@ -94,6 +119,12 @@ jobs:
           # The runner stops when this is false: see
           # token_problem() in factory/agent_runner.py.
           AGENT_TOKEN_SET: ${{ secrets.AGENT_GH_TOKEN != '' }}
+          # Only qodo() passes these on, to the pinned CLI; the
+          # generated code runs as the sandbox user, which
+          # cannot read this process's environment.
+          QODO_API_KEY: ${{ secrets.QODO_API_KEY }}
+          QODO_BASE_URL: ${{ vars.QODO_BASE_URL }}
+          LOCAL_REVIEW_ROUNDS: "2"
           EURI_API_KEY: ${{ secrets.EURI_API_KEY }}
           EURI_MODEL: ${{ vars.EURI_MODEL }}
           EURI_BASE_URL: ${{ vars.EURI_BASE_URL }}
