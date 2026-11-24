@@ -208,6 +208,23 @@ class ApplyEditsTests(unittest.TestCase):
         self.assertEqual((self.root / 'a.py').read_text(),
                          'x = 1\n\n\ny = 2\n')
 
+    def test_a_label_only_append_is_refused(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        with self.assertRaisesRegex(ValueError, 'only a label'):
+            self.apply('FILE: a.py\n<<<<<<< APPEND\n'
+                       '--- a.py (add at the end) ---\n'
+                       '>>>>>>> APPEND\n')
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 1\n')
+
+    def test_a_copied_file_heading_is_not_an_append(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        with self.assertRaisesRegex(ValueError, 'not file text'):
+            self.apply(block('a.py', '--- a.py ---\n',
+                             'x = 1\ny = 2\n'))
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 1\n')
+
     def test_markdown_keeps_such_a_line(self):
         (self.root / 'notes.md').write_text('# Notes\n')
         self.apply('FILE: notes.md\n<<<<<<< APPEND\n'
