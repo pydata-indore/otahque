@@ -2050,5 +2050,64 @@ class LocalCliTests(unittest.TestCase):
         with self.assertRaises(agent_runner.QodoUnavailable):
             agent_runner.qodo('review', 'status', 'x', cwd='.')
 
+
+class EditLoopStopTests(unittest.TestCase):
+    """A run that cannot pass stops early and says why."""
+
+    def setUp(self):
+        self.asked = 0
+        fake = {
+            'ask': self.reply,
+            'apply_edits': lambda reply, allowed: ['x.py'],
+            'retry_files': lambda reply, allowed: [],
+            'retry_text': lambda paths: '',
+            'log': lambda text: None,
+            'MAX_ATTEMPTS': 3,
+        }
+        for name, value in fake.items():
+            self.addCleanup(setattr, agent_runner, name,
+                            getattr(agent_runner, name))
+            setattr(agent_runner, name, value)
+
+    def reply(self, messages):
+        self.asked += 1
+        return 'edits'
+
+    def test_a_settings_refusal_stops_at_once(self):
+        report = ('Settings changes not allowed. The ticket '
+                  'opens ADMIN_URL; imports are never open:\n'
+                  'config/settings.py line 46: ADMIN_URL = '
+                  'config(...)')
+        with self.assertRaises(agent_runner.Blocked) as caught:
+            agent_runner.edit_loop([], None,
+                                   lambda: (False, report),
+                                   'Code')
+        self.assertEqual(self.asked, 1)
+        self.assertIn('settings guard', str(caught.exception))
+        self.assertIn('ADMIN_URL', str(caught.exception))
+
+    def test_running_out_names_the_last_failure(self):
+        report = 'FAILED (failures=2)\ntest_list_shows_drafts'
+        with self.assertRaises(agent_runner.Blocked) as caught:
+            agent_runner.edit_loop([], None,
+                                   lambda: (False, report),
+                                   'Code')
+        self.assertEqual(self.asked, 3)
+        self.assertIn('still failing after 3 attempts',
+                      str(caught.exception))
+        self.assertIn('test_list_shows_drafts',
+                      str(caught.exception))
+
+    def test_unapplied_edits_are_named_too(self):
+        def refuse(reply, allowed):
+            raise ValueError(
+                'No FILE/SEARCH/REPLACE blocks found.')
+        agent_runner.apply_edits = refuse
+        with self.assertRaises(agent_runner.Blocked) as caught:
+            agent_runner.edit_loop([], None,
+                                   lambda: (True, ''), 'Code')
+        self.assertIn('No FILE/SEARCH/REPLACE blocks',
+                      str(caught.exception))
+
 if __name__ == '__main__':
     unittest.main()
