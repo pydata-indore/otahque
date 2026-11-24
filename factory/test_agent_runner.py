@@ -176,6 +176,45 @@ class ApplyEditsTests(unittest.TestCase):
         self.assertEqual((self.root / 'a.py').read_text(),
                          'foo_b = 1\n\n\nb = 1\n')
 
+    def test_a_label_only_search_becomes_an_append(self):
+        (self.root / 'tests.py').write_text(
+            'class A:\n    pass\n')
+        label = ('--- tests.py (add at the end) '
+                 '(book section-23-3) ---')
+        self.apply(block('tests.py', label + '\n',
+                         label + '\nclass B:\n    pass\n'))
+        self.assertEqual((self.root / 'tests.py').read_text(),
+                         'class A:\n    pass\n\n\n'
+                         'class B:\n    pass\n')
+
+    def test_a_label_inside_new_code_is_not_written(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        reply = (block('a.py', 'x = 1\n',
+                       '--- a.py ---\nx = 2\n')
+                 + 'FILE: a.py\n<<<<<<< APPEND\n'
+                 '--- a.py (add at the end) ---\ny = 3\n'
+                 '>>>>>>> APPEND\n')
+        self.apply(reply)
+        text = (self.root / 'a.py').read_text()
+        self.assertNotIn('---', text)
+        self.assertEqual(text, 'x = 2\n\n\ny = 3\n')
+
+    def test_a_book_listing_label_is_not_written(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        label = agent_runner.reference_label(
+            'a.py (add at the end)', 'section-23-3')
+        self.apply('FILE: a.py\n<<<<<<< APPEND\n' + label
+                   + '\ny = 2\n>>>>>>> APPEND\n')
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 1\n\n\ny = 2\n')
+
+    def test_markdown_keeps_such_a_line(self):
+        (self.root / 'notes.md').write_text('# Notes\n')
+        self.apply('FILE: notes.md\n<<<<<<< APPEND\n'
+                   '--- a heading rule ---\n>>>>>>> APPEND\n')
+        self.assertIn('--- a heading rule ---',
+                      (self.root / 'notes.md').read_text())
+
     def test_one_bad_block_keeps_its_file_unchanged(self):
         (self.root / 'a.py').write_text('x = 1\ny = 1\n')
         reply = (block('a.py', 'x = 1\n', 'x = 2\n')
@@ -2159,6 +2198,23 @@ class LocalCliTests(unittest.TestCase):
         os.environ['QODO_API_KEY'] = ''
         with self.assertRaises(agent_runner.QodoUnavailable):
             agent_runner.qodo('review', 'status', 'x', cwd='.')
+
+
+class ReferenceLabelTests(unittest.TestCase):
+    """Book listings carry labels no file could contain."""
+
+    def test_add_at_the_end_names_append(self):
+        label = agent_runner.reference_label(
+            'registrations/tests.py (add at the end)',
+            'section-23-3')
+        self.assertIn('APPEND', label)
+        self.assertIn('registrations/tests.py', label)
+        self.assertFalse(label.startswith('--- '))
+
+    def test_other_listings_do_not_name_append(self):
+        label = agent_runner.reference_label(
+            'events/admin.py', 'section-23-4')
+        self.assertNotIn('APPEND', label)
 
 
 class EditLoopStopTests(unittest.TestCase):

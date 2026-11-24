@@ -34,7 +34,10 @@ the issue number.
    class) without quoting the file. Each file's blocks apply
    together or not at all; a file with a bad block stays as it
    was, while the other files' edits are kept and the model is
-   told which, so it resends only the rest.
+   told which, so it resends only the rest. A label line copied
+   from the reference or a file heading (`--- … ---`) is dropped
+   from code for a Python or template file; a SEARCH that held
+   only such a label becomes an APPEND, which is what it meant.
    After every edit the script itself runs the checks: allowed
    paths, the settings guard, at most 65 characters per line,
    then `makemigrations` if the ticket asks for it,

@@ -514,9 +514,17 @@ def apply_one(edit, allowed, pending):
     else:
         old = None
     if edit['append'] is not None:
-        pending[path] = appended(path, old, edit['append'])
+        pending[path] = appended(
+            path, old, unlabel(path, edit['append']))
         return
-    search, replace = edit['search'], edit['replace']
+    search = unlabel(path, edit['search'])
+    replace = unlabel(path, edit['replace'])
+    if (edit['search'].strip() and not search.strip()
+            and old is not None and old.strip()):
+        # The SEARCH held only a label copied from the
+        # reference: the model meant to add at the end (#55).
+        pending[path] = appended(path, old, replace)
+        return
     if not search.strip():
         # An empty file has nothing a SEARCH could match, so an
         # empty SEARCH may fill it, as for a new file.
@@ -537,6 +545,32 @@ def apply_one(edit, allowed, pending):
         raise ValueError(
             search_problem(path, old, search, count))
     pending[path] = old.replace(search, replace)
+
+
+# A whole-line label, as the runner prints around files and
+# book listings; it can never be a line of Python or a template.
+LABEL_LINE = re.compile(r'^--- .+ ---$|^\[book listing: .*\]$')
+
+
+def unlabel(path, text):
+    """Drop label lines from code the model sends for path."""
+    if not path.endswith(('.py', '.html')):
+        return text
+    return ''.join(
+        line for line in text.splitlines(keepends=True)
+        if not LABEL_LINE.match(line.rstrip('\n')))
+
+
+def reference_label(label, section):
+    """Return the line printed above one book listing.
+
+    It is unlike any file line, and when the book says "add at
+    the end" it names the APPEND block to use (#55, run 3).
+    """
+    hint = (' Add it with an APPEND block.'
+            if 'add at the end' in label.lower() else '')
+    return (f'[book listing: {label}, {section}; reference '
+            f'only, not file text.{hint}]')
 
 
 def appended(path, old, text):
@@ -1244,7 +1278,7 @@ def reference_text(issue):
                     break
                 total += len(text)
                 parts.append(
-                    f'--- {label} (book {section}) ---\n'
+                    reference_label(label, section) + '\n'
                     + text)
         log(f'- Reference: {len(parts)} listings from '
             f'chapter {number} of {REFERENCE_REPO}')
