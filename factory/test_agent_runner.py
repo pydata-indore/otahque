@@ -53,7 +53,7 @@ def block(path, search, replace):
 
 
 class ApplyEditsTests(unittest.TestCase):
-    """apply_edits() writes every block or none of them."""
+    """apply_edits() writes each file's blocks or none."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -94,16 +94,66 @@ class ApplyEditsTests(unittest.TestCase):
         text = (self.root / 'app/__init__.py').read_text()
         self.assertEqual(text, 'x\n')
 
-    def test_a_bad_block_writes_nothing(self):
+    def test_a_bad_file_keeps_the_good_ones(self):
         (self.root / 'a.py').write_text('x = 1\n')
         reply = (block('new.py', '', 'y = 2\n')
                  + block('a.py', 'x = 1\n', 'x = 3\n')
                  + block('missing.py', 'z\n', 'w\n'))
+        partial = agent_runner.PartialEdits
+        with self.assertRaises(partial) as caught:
+            self.apply(reply)
+        self.assertEqual(sorted(caught.exception.changed),
+                         ['a.py', 'new.py'])
+        self.assertIn('missing.py', str(caught.exception))
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 3\n')
+        self.assertFalse((self.root / 'missing.py').exists())
+
+    def test_nothing_written_is_not_partial(self):
+        reply = block('missing.py', 'z\n', 'w\n')
+        with self.assertRaises(ValueError) as caught:
+            self.apply(reply)
+        self.assertNotIsInstance(caught.exception,
+                                 agent_runner.PartialEdits)
+        self.assertNotIn('Applied anyway', str(caught.exception))
+
+    def test_one_bad_block_keeps_its_file_unchanged(self):
+        (self.root / 'a.py').write_text('x = 1\ny = 1\n')
+        reply = (block('a.py', 'x = 1\n', 'x = 2\n')
+                 + block('a.py', 'nope\n', 'z\n'))
         with self.assertRaises(ValueError):
             self.apply(reply)
-        self.assertFalse((self.root / 'new.py').exists())
-        text = (self.root / 'a.py').read_text()
-        self.assertEqual(text, 'x = 1\n')
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 1\ny = 1\n')
+
+    def test_append_adds_to_the_end(self):
+        (self.root / 'tests.py').write_text(
+            'class A:\n    pass\n')
+        reply = ('FILE: tests.py\n<<<<<<< APPEND\n'
+                 'class B:\n    pass\n>>>>>>> APPEND\n')
+        self.assertEqual(self.apply(reply), ['tests.py'])
+        self.assertEqual((self.root / 'tests.py').read_text(),
+                         'class A:\n    pass\n\n\n'
+                         'class B:\n    pass\n')
+
+    def test_append_creates_a_missing_file(self):
+        reply = ('FILE: notes.md\n<<<<<<< APPEND\n'
+                 '# Notes\n>>>>>>> APPEND\n')
+        self.assertEqual(self.apply(reply), ['notes.md'])
+        self.assertEqual((self.root / 'notes.md').read_text(),
+                         '# Notes\n')
+
+    def test_append_and_search_mix_in_one_reply(self):
+        (self.root / 't.py').write_text(
+            'import os\n\n\nclass A:\n    pass\n')
+        reply = (block('t.py', 'import os\n',
+                       'import os\nimport sys\n')
+                 + 'FILE: t.py\n<<<<<<< APPEND\nclass B:\n'
+                 '    pass\n>>>>>>> APPEND\n')
+        self.apply(reply)
+        text = (self.root / 't.py').read_text()
+        self.assertTrue(text.startswith('import os\nimport sys'))
+        self.assertTrue(text.endswith('class B:\n    pass\n'))
 
     def test_every_bad_block_is_named(self):
         reply = (block('one.py', 'a\n', 'b\n')
@@ -114,7 +164,7 @@ class ApplyEditsTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn('one.py does not exist', message)
         self.assertIn('two.py does not exist', message)
-        self.assertFalse((self.root / 'ok.py').exists())
+        self.assertTrue((self.root / 'ok.py').exists())
 
     def test_later_blocks_see_earlier_ones(self):
         reply = (block('new.py', '', 'x = 1\n')
@@ -123,13 +173,14 @@ class ApplyEditsTests(unittest.TestCase):
         text = (self.root / 'new.py').read_text()
         self.assertEqual(text, 'x = 2\n')
 
-    def test_a_refused_path_writes_nothing(self):
+    def test_a_refused_path_is_never_written(self):
         reply = (block('ok.py', '', 'x\n')
                  + block('no.py', '', 'y\n'))
         with self.assertRaisesRegex(ValueError, 'may not'):
             agent_runner.apply_edits(
                 reply, lambda path: path == 'ok.py')
-        self.assertFalse((self.root / 'ok.py').exists())
+        self.assertFalse((self.root / 'no.py').exists())
+        self.assertTrue((self.root / 'ok.py').exists())
 
 
 
@@ -2112,6 +2163,20 @@ class EditLoopStopTests(unittest.TestCase):
                       message)
         self.assertIn('FAILED (errors=1)', message)
         self.assertIn('lines left out', message)
+
+    def test_partly_applied_edits_say_so(self):
+        def partly(reply, allowed):
+            raise agent_runner.PartialEdits(
+                'b.py does not exist yet.\n'
+                'Applied anyway: a.py.',
+                ['a.py'])
+        agent_runner.apply_edits = partly
+        with self.assertRaises(agent_runner.Blocked) as caught:
+            agent_runner.edit_loop([], None,
+                                   lambda: (True, ''), 'Code')
+        message = str(caught.exception)
+        self.assertIn('Some of your edits were applied', message)
+        self.assertIn('Applied anyway: a.py', message)
 
     def test_unapplied_edits_are_named_too(self):
         def refuse(reply, allowed):
