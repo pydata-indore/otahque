@@ -168,6 +168,14 @@ class ApplyEditsTests(unittest.TestCase):
         text = (self.root / 'tests.py').read_text()
         self.assertEqual(text.count('class B:'), 1)
 
+    def test_a_suffix_of_the_last_line_is_still_added(self):
+        (self.root / 'a.py').write_text('foo_b = 1\n')
+        reply = ('FILE: a.py\n<<<<<<< APPEND\n'
+                 'b = 1\n>>>>>>> APPEND\n')
+        self.apply(reply)
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'foo_b = 1\n\n\nb = 1\n')
+
     def test_one_bad_block_keeps_its_file_unchanged(self):
         (self.root / 'a.py').write_text('x = 1\ny = 1\n')
         reply = (block('a.py', 'x = 1\n', 'x = 2\n')
