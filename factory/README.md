@@ -62,7 +62,11 @@ the issue number.
    Medium finding with its type, severity and verdict, the Low
    findings flagged for a human, and the reviewed commit against
    the PR head. "Gate met" only when no High or Medium finding is
-   open and the latest review covers the head. Otherwise the
+   open and the latest review covers the head. The run itself
+   can only say "Gate met on Qodo's comment": the comment names
+   the head even when Qodo skipped it, so a second job confirms
+   the gate in Qodo's review records (see "Qodo's review
+   records"). Otherwise the
    report says the task is not done and why (a disputed finding,
    findings left after `REVIEW_ROUNDS`, or a stale review), and
    the issue gets `agent-blocked`. A human reviews and merges.
@@ -171,6 +175,35 @@ comment the run cannot read is reported separately. The run
 never force-pushes, never merges, and never
 reuses an existing branch.
 
+## Qodo's review records
+
+When the run ends with "Gate met on Qodo's comment", it hands the
+PR number and head commit to a second job, `confirm`, which runs
+[`confirm_gate.py`](confirm_gate.py). That job reads Qodo's
+records of the PR with the Qodo CLI (`qodo read
+pr-review-session findings --extended`). Each run there says
+whether it was complete or skipped. The gate is confirmed when a
+complete run covers the head, or when the head was skipped and
+only Markdown other than `AGENTS.md` changed since the last
+complete run, on the same branch. Records it cannot read, a
+missing `QODO_API_KEY`, a CLI that does not match its pinned
+hash, or a head that moved after the agent job all count as "not
+met": the job comments on the PR, labels the issue
+`agent-blocked`, and fails.
+
+`confirm` runs on a fresh machine with code from `main`. Nothing
+from the PR is executed there, only `git diff` on its commits.
+That is why the Qodo key lives only in that job: the agent job
+runs generated code, which could read any secret on its machine.
+
+The CLI is pinned. The job downloads one release,
+`https://get.qodo.ai/releases/<version>/qodo.mjs`, and refuses it
+unless its SHA-256 matches the hash Qodo publishes for that release
+(`releases/<version>/release.json`). Qodo's installer script is
+never run, and auto-update is off. The CLI gets the Qodo key and
+no GitHub token. To move the pin, change `QODO_VERSION` and
+`QODO_SHA256` together in a reviewed PR.
+
 ## Checks on every pull request
 
 [`checks.yml`](../.github/workflows/checks.yml) runs on every pull
@@ -206,6 +239,8 @@ Under Settings, Secrets and variables, Actions:
 | Variable | `EURI_MODEL` | Model name |
 | Variable | `EURI_BASE_URL` | OpenAI-compatible base URL |
 | Secret | `AGENT_GH_TOKEN` | Token for the PR and comments; the run stops without it |
+| Secret | `QODO_API_KEY` | Qodo key, used only by the `confirm` job; without it the gate is never confirmed |
+| Variable | `QODO_BASE_URL` | Qodo API address, `https://sdk.qodo.ai` |
 
 Without `AGENT_GH_TOKEN`, the run stops at the start with that
 reason: a PR from `github-actions[bot]` would never start the

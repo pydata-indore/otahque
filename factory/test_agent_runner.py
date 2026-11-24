@@ -4,6 +4,8 @@ Run from the repository root with:
 python -m unittest factory/test_agent_runner.py
 """
 
+import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -16,6 +18,7 @@ os.environ.setdefault('REPO', 'example/example')
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agent_runner  # noqa: E402
+import confirm_gate  # noqa: E402
 
 # The real lookup, kept before any test replaces it.
 HEAD_COMMIT = agent_runner.head_commit
@@ -1157,7 +1160,8 @@ class GateLoopTests(unittest.TestCase):
         low = self.finding('Low', 'Rule violation', 'Long line')
         self.run_loop([[low]], [])
         self.assertEqual(self.fixed, [])
-        self.assertIn('**Gate met.**', self.posted[-1])
+        self.assertIn("**Gate met on Qodo's comment.**",
+                      self.posted[-1])
         self.assertIn('Long line (Rule violation',
                       self.posted[-1])
 
@@ -1167,7 +1171,8 @@ class GateLoopTests(unittest.TestCase):
                       [[{'n': 1, 'verdict': 'confirmed',
                          'reason': 'real'}]])
         self.assertEqual(self.fixed, ['Review fix 1'])
-        self.assertIn('**Gate met.**', self.posted[-1])
+        self.assertIn("**Gate met on Qodo's comment.**",
+                      self.posted[-1])
         self.assertIn('Wrong 404', self.posted[-1])
 
     def test_a_disputed_high_finding_is_not_done(self):
@@ -1331,6 +1336,223 @@ class TokenTests(unittest.TestCase):
         # A run outside Actions does not say either way.
         self.assertIsNone(agent_runner.token_problem(''))
 
+
+# Qodo's recorded runs on PR #44 (23 November 2026), newest
+# first: the chapter commit got a full review, then the README
+# rewrap on top of it was skipped twice.
+CHAPTER = '0330f4e962f6649c66d112f3e2e899859d2221bd'
+REWRAP = '711a77013274b828b4331d84ff1bc0c29f5b62a2'
+PR44_RUNS = [
+    {'run_id': 2118564, 'commit_sha': REWRAP,
+     'started_at': '2026-11-23T18:10:15.591129Z',
+     'status': 'completed', 'review_effort': 'skip',
+     'review_complete': False},
+    {'run_id': 2118531, 'commit_sha': REWRAP,
+     'started_at': '2026-11-23T18:08:31.320570Z',
+     'status': 'completed', 'review_effort': 'skip',
+     'review_complete': False},
+    {'run_id': 2118391, 'commit_sha': CHAPTER,
+     'started_at': '2026-11-23T18:01:18.461244Z',
+     'status': 'completed', 'review_effort': 'extended',
+     'review_complete': True},
+]
+
+
+class ReviewCoverageTests(unittest.TestCase):
+    """A skipped head passes only after docs-only changes."""
+
+    def check(self, runs, changed):
+        return confirm_gate.coverage_problem(
+            runs, REWRAP, lambda base: changed)
+
+    def test_a_complete_review_of_the_head_passes(self):
+        runs = [dict(PR44_RUNS[2], commit_sha=REWRAP)]
+        self.assertEqual(self.check(runs, None), (None, ''))
+
+    def test_skipped_head_after_readme_change_passes(self):
+        problem, note = self.check(PR44_RUNS, ['README.md'])
+        self.assertIsNone(problem)
+        self.assertIn('0330f4e', note)
+        self.assertIn('README.md', note)
+
+    def test_skipped_head_after_agents_md_change_fails(self):
+        problem, _ = self.check(
+            PR44_RUNS, ['README.md', 'AGENTS.md'])
+        self.assertIn('AGENTS.md', problem)
+
+    def test_skipped_head_after_code_change_fails(self):
+        problem, _ = self.check(
+            PR44_RUNS, ['docs/design/erd.md',
+                        'events/models.py'])
+        self.assertIn('events/models.py', problem)
+
+    def test_full_review_not_an_ancestor_fails(self):
+        problem, _ = self.check(PR44_RUNS, None)
+        self.assertIn('0330f4e', problem)
+
+    def test_unreadable_records_fail(self):
+        for runs in (None, []):
+            with self.subTest(runs=runs):
+                problem, _ = self.check(runs, ['README.md'])
+                self.assertIn('could not be read', problem)
+
+    def test_no_run_for_the_head_fails(self):
+        problem, _ = self.check(PR44_RUNS[2:], ['README.md'])
+        self.assertIn('no completed review run of the head',
+                      problem)
+
+    def test_only_skipped_runs_fail(self):
+        problem, _ = self.check(PR44_RUNS[:2], ['README.md'])
+        self.assertIn('no complete review', problem)
+
+    def test_markdown_counts_as_docs_except_agents_md(self):
+        self.assertTrue(confirm_gate.is_docs('README.md'))
+        self.assertTrue(confirm_gate.is_docs('docs/adr/a.md'))
+        self.assertFalse(confirm_gate.is_docs('AGENTS.md'))
+        self.assertFalse(confirm_gate.is_docs('x/AGENTS.md'))
+        self.assertFalse(confirm_gate.is_docs('events/views.py'))
+
+
+class ParseRunsTests(unittest.TestCase):
+    """Only a list of run records counts as readable."""
+
+    def test_real_output_is_read(self):
+        out = 'note\n' + json.dumps({'review_runs': PR44_RUNS})
+        self.assertEqual(confirm_gate.parse_runs(0, out),
+                         PR44_RUNS)
+
+    def test_malformed_records_are_unreadable(self):
+        truncated = json.dumps(
+            {'review_runs': [],
+             'qar_operation_result_truncated': True})
+        for out in ('{"review_runs": [null]}',
+                    '{"review_runs": {}}', '[]', 'no json',
+                    truncated):
+            with self.subTest(out=out):
+                self.assertIsNone(
+                    confirm_gate.parse_runs(0, out))
+        self.assertIsNone(confirm_gate.parse_runs(
+            1, json.dumps({'review_runs': PR44_RUNS})))
+
+
+class VerdictTests(unittest.TestCase):
+    """The confirm job's verdict on the head it was handed."""
+
+    def test_docs_only_skip_is_confirmed(self):
+        met, text = confirm_gate.verdict(
+            PR44_RUNS, REWRAP, [REWRAP, REWRAP],
+            lambda b: ['README.md'])
+        self.assertTrue(met)
+        self.assertIn('only docs changed', text)
+
+    def test_head_moved_after_the_agent_job_fails(self):
+        met, text = confirm_gate.verdict(
+            PR44_RUNS, CHAPTER, [REWRAP, REWRAP], lambda b: [])
+        self.assertFalse(met)
+        self.assertIn('moved', text)
+
+    def test_push_while_records_were_read_fails(self):
+        met, text = confirm_gate.verdict(
+            PR44_RUNS, REWRAP, [REWRAP, CHAPTER],
+            lambda b: ['README.md'])
+        self.assertFalse(met)
+        self.assertIn('moved', text)
+
+
+class RenameTests(unittest.TestCase):
+    """A rename counts under its old name too."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(setattr, confirm_gate, 'ROOT',
+                        confirm_gate.ROOT)
+        confirm_gate.ROOT = root = Path(folder.name)
+        def git(*args):
+            return confirm_gate.git(*args)[1].strip()
+        confirm_gate.git('init', '-q')
+        (root / 'AGENTS.md').write_text('rules\n' * 20)
+        git('add', '.')
+        git('-c', 'user.name=t', '-c', 'user.email=t@e.x',
+            'commit', '-qm', 'one')
+        self.base = git('rev-parse', 'HEAD')
+        git('mv', 'AGENTS.md', 'README.md')
+        git('-c', 'user.name=t', '-c', 'user.email=t@e.x',
+            'commit', '-qm', 'two')
+        self.head = git('rev-parse', 'HEAD')
+
+    def test_renamed_agents_md_is_not_docs_only(self):
+        files = confirm_gate.changed_since(self.base, self.head)
+        self.assertIn('AGENTS.md', files)
+        problem, _ = confirm_gate.coverage_problem(
+            [dict(PR44_RUNS[0], commit_sha=self.head),
+             dict(PR44_RUNS[2], commit_sha=self.base)],
+            self.head,
+            lambda b: confirm_gate.changed_since(b, self.head))
+        self.assertIn('AGENTS.md', problem)
+
+
+class QodoCliTests(unittest.TestCase):
+    """The key goes only to the pinned, unchanged CLI."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.cli = Path(folder.name) / 'qodo.mjs'
+        self.cli.write_text('pinned', encoding='utf-8')
+        self.calls = []
+        self.addCleanup(setattr, confirm_gate.subprocess, 'run',
+                        confirm_gate.subprocess.run)
+        confirm_gate.subprocess.run = (
+            lambda *a, **k: self.calls.append((a, k)))
+        pinned = hashlib.sha256(b'pinned').hexdigest()
+        for name, value in {'QODO_API_KEY': 'k',
+                            'QODO_CLI_JS': str(self.cli),
+                            'QODO_SHA256': pinned}.items():
+            self.addCleanup(os.environ.pop, name, None)
+            os.environ[name] = value
+
+    def test_changed_cli_never_gets_the_key(self):
+        self.cli.write_text('changed', encoding='utf-8')
+        self.assertIsNone(confirm_gate.qodo_runs(44, 'o/r'))
+        self.assertEqual(self.calls, [])
+
+    def test_no_key_means_no_records(self):
+        os.environ['QODO_API_KEY'] = ''
+        self.assertIsNone(confirm_gate.qodo_runs(44, 'o/r'))
+        self.assertEqual(self.calls, [])
+
+
+class HandoffTests(unittest.TestCase):
+    """A comment-level pass hands the PR to the confirm job."""
+
+    def setUp(self):
+        self.posted = []
+        self.addCleanup(setattr, agent_runner, 'comment',
+                        agent_runner.comment)
+        agent_runner.comment = (
+            lambda kind, n, text: self.posted.append(text))
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.output = Path(folder.name) / 'out'
+        self.addCleanup(os.environ.pop, 'GITHUB_OUTPUT', None)
+        os.environ['GITHUB_OUTPUT'] = str(self.output)
+
+    def test_gate_met_on_comment_hands_off(self):
+        agent_runner.finish(44, [], [], True, '', REWRAP,
+                            REWRAP)
+        self.assertIn("Gate met on Qodo's comment",
+                      self.posted[-1])
+        self.assertIn('confirm job', self.posted[-1])
+        self.assertEqual(
+            self.output.read_text(encoding='utf-8'),
+            f'pr=44\nhead={REWRAP}\n')
+
+    def test_a_failed_gate_hands_nothing_off(self):
+        with self.assertRaises(agent_runner.Blocked):
+            agent_runner.finish(44, [], [], False, 'Open High.',
+                                REWRAP, REWRAP)
+        self.assertFalse(self.output.exists())
 
 if __name__ == '__main__':
     unittest.main()

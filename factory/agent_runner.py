@@ -1755,8 +1755,8 @@ def gate_report(rows, low, gate_met, reason, reviewed, head):
               'Checks: passed on the last commit '
               '(`manage.py check`, `test`, `makemigrations '
               '--check`).', '',
-              ('**Gate met.** Ready for a human to review and '
-               'merge.' if gate_met else
+              ("**Gate met on Qodo's comment.** " + reason
+               if gate_met else
                '**Gate not met: the task is not done.** '
                + reason)]
     return '\n'.join(lines)
@@ -1980,6 +1980,14 @@ def diff_from_main():
     return out
 
 
+def handoff(pr, head):
+    """Pass the PR and its head to the confirm job."""
+    out = os.environ.get('GITHUB_OUTPUT')
+    if out:
+        with open(out, 'a', encoding='utf-8') as f:
+            f.write(f'pr={pr}\nhead={head}\n')
+
+
 def finish(pr, rows, low, gate_met, reason, reviewed, head):
     """Post the gate report; stop as not done if it failed.
 
@@ -1990,6 +1998,15 @@ def finish(pr, rows, low, gate_met, reason, reviewed, head):
         gate_met = False
         reason = ('The latest Qodo review does not cover the PR '
                   'head commit, so the gate cannot be checked.')
+    if gate_met:
+        # The comment names the head even after Qodo skipped it
+        # (#44). The confirm job checks Qodo's records on a fresh
+        # machine, since generated code ran on this one.
+        reason = ("Qodo's comment shows nothing High or Medium "
+                  'open on the head; the confirm job now checks '
+                  "Qodo's records for a complete review of it "
+                  '(factory/confirm_gate.py).')
+        handoff(pr, head)
     comment('pr', pr, f'Agent summary ({RUN_URL})\n\n'
             + gate_report(rows, low, gate_met, reason,
                           reviewed, head))

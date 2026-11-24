@@ -28,6 +28,10 @@ jobs:
       github.event.label.name == 'ready-for-agent'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    # Set by the runner when Qodo's comment shows the gate met.
+    outputs:
+      pr: ${{ steps.run.outputs.pr }}
+      head: ${{ steps.run.outputs.head }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,6 +54,7 @@ jobs:
           } > .env
 
       - name: Run the agent
+        id: run
         env:
           ISSUE: ${{ github.event.issue.number || inputs.issue }}
           REPO: ${{ github.repository }}
@@ -97,3 +102,79 @@ jobs:
           name: agent-log-${{ github.run_id }}
           path: factory-log.md
           if-no-files-found: ignore
+
+  # Confirms the gate in Qodo's records (factory/confirm_gate.py)
+  # on a fresh machine: no generated code runs here, so the Qodo
+  # key never shares a machine with the model's code.
+  confirm:
+    needs: agent
+    if: needs.agent.outputs.pr != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.13.0
+
+      # Qodo's own installer always takes the newest release, so
+      # the CLI is downloaded at a pinned version and checked
+      # against Qodo's published hash. Move both in a reviewed PR.
+      - name: Install the Qodo CLI (pinned)
+        id: cli
+        env:
+          QODO_VERSION: 2.6.0
+          QODO_SHA256: >-
+            0eb4df6a511cb7e170dc3ff8caee751623ccb1a1770157cf7bad96715f509d29
+        run: |
+          cli="$RUNNER_TEMP/qodo/qodo.mjs"
+          mkdir -p "$(dirname "$cli")"
+          url="https://get.qodo.ai/releases/$QODO_VERSION/qodo.mjs"
+          curl -fsSL -o "$cli" "$url"
+          echo "$QODO_SHA256  $cli" | sha256sum -c -
+          echo "QODO_CLI_JS=$cli" >> "$GITHUB_ENV"
+          echo "QODO_SHA256=$QODO_SHA256" >> "$GITHUB_ENV"
+
+      - name: Check Qodo's records of the PR
+        env:
+          PR: ${{ needs.agent.outputs.pr }}
+          HEAD: ${{ needs.agent.outputs.head }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          REPO: ${{ github.repository }}
+          RUN_URL: >-
+            ${{ github.server_url }}/${{ github.repository
+            }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          QODO_API_KEY: ${{ secrets.QODO_API_KEY }}
+          QODO_BASE_URL: ${{ vars.QODO_BASE_URL }}
+        run: python3 factory/confirm_gate.py
+
+      # confirm_gate.py reports its own failures; this covers a
+      # CLI download or hash check that stopped the job first.
+      - name: Report a failed CLI install
+        if: failure() && steps.cli.outcome == 'failure'
+        env:
+          PR: ${{ needs.agent.outputs.pr }}
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: >-
+            ${{ github.server_url }}/${{ github.repository
+            }}/actions/runs/${{ github.run_id }}
+        run: |
+          text="Gate not met: the pinned Qodo CLI could not be"
+          text="$text installed or did not match its hash, so"
+          text="$text Qodo's records were not checked. $RUN_URL"
+          gh pr comment "$PR" -R "$GITHUB_REPOSITORY" \
+            --body "$text"
+          gh issue edit "$ISSUE" -R "$GITHUB_REPOSITORY" \
+            --add-label agent-blocked
+          gh issue comment "$ISSUE" -R "$GITHUB_REPOSITORY" \
+            --body "The agent stopped and needs help. $text"
