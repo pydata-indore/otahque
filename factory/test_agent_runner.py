@@ -159,7 +159,8 @@ class ApplyEditsTests(unittest.TestCase):
                          'x = 1\ny = 1\n')
 
     def test_a_resent_append_is_not_added_twice(self):
-        (self.root / 'tests.py').write_text('class A:\n    pass\n')
+        (self.root / 'tests.py').write_text(
+            'class A:\n    pass\n')
         reply = ('FILE: tests.py\n<<<<<<< APPEND\n'
                  'class B:\n    pass\n>>>>>>> APPEND\n')
         self.apply(reply)
