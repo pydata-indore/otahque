@@ -11,8 +11,11 @@ chapters already print, and which later chapter fills a gap.
   ("Chapter 23: ...") and its ticket.
 - A gap that a later chapter fills is not a defect of this pull
   request (AGENTS.md, rule 7). Find the chapter below or in
-  "Where later work lands" in docs/STANDARDS.md. A planned
-  chapter excuses a gap only when its title names that topic.
+  "Where later work lands" in docs/STANDARDS.md. A later chapter
+  covers a gap only when the book or this repository names it for
+  that topic: its title, its row in that table, or a published
+  chapter that hands the topic to it (Chapter 21 hands SQLite's
+  `LOWER()` limit to Chapter 32).
 - A bug in code this change adds (a wrong result, a crash, lost
   or corrupted data) is a finding now, whatever later chapter
   improves that area. So are security defects, failing tests,
