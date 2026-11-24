@@ -116,8 +116,11 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      # Always main's code, even when the workflow was started by
+      # hand from another branch: this job holds the Qodo key.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
 

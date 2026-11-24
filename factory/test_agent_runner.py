@@ -1459,6 +1459,24 @@ class VerdictTests(unittest.TestCase):
         self.assertIn('moved', text)
 
 
+class CheckedTests(unittest.TestCase):
+    """A failing check still gives a reason, never a crash."""
+
+    def test_an_error_becomes_gate_not_met(self):
+        def broken(pr, repo, handed):
+            raise RuntimeError('gh pr: HTTP 502')
+        self.addCleanup(setattr, confirm_gate, 'confirm',
+                        confirm_gate.confirm)
+        confirm_gate.confirm = broken
+        met, text = confirm_gate.checked('48', 'o/r', REWRAP)
+        self.assertFalse(met)
+        self.assertIn('HTTP 502', text)
+
+    def test_undecodable_cli_output_is_unreadable(self):
+        self.assertIsNone(confirm_gate.parse_runs(
+            0, b'\xff\xfe'.decode('utf-8', 'replace')))
+
+
 class RenameTests(unittest.TestCase):
     """A rename counts under its old name too."""
 
@@ -1480,6 +1498,18 @@ class RenameTests(unittest.TestCase):
         git('-c', 'user.name=t', '-c', 'user.email=t@e.x',
             'commit', '-qm', 'two')
         self.head = git('rev-parse', 'HEAD')
+
+    def test_accented_markdown_name_counts_as_docs(self):
+        git = confirm_gate.git
+        name = 'r\u00e9sum\u00e9.md'
+        (confirm_gate.ROOT / name).write_text('x\n')
+        git('add', '.')
+        git('-c', 'user.name=t', '-c', 'user.email=t@e.x',
+            'commit', '-qm', 'three')
+        head = git('rev-parse', 'HEAD')[1].strip()
+        files = confirm_gate.changed_since(self.head, head)
+        self.assertEqual(files, [name])
+        self.assertTrue(confirm_gate.is_docs(files[0]))
 
     def test_renamed_agents_md_is_not_docs_only(self):
         files = confirm_gate.changed_since(self.base, self.head)

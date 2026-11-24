@@ -67,7 +67,7 @@ def qodo_runs(pr, repo):
              '--json'],
             cwd=tempfile.gettempdir(), env=env,
             capture_output=True, text=True, timeout=120,
-            encoding='utf-8')
+            encoding='utf-8', errors='replace')
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f'Qodo CLI failed: {error!r}')
         return None
@@ -98,7 +98,8 @@ def parse_runs(code, out):
 def git(*args):
     """Run git in the checkout; return (code, output)."""
     done = subprocess.run(['git', *args], cwd=ROOT,
-                          capture_output=True, text=True)
+                          capture_output=True, text=True,
+                          encoding='utf-8', errors='replace')
     return done.returncode, done.stdout
 
 
@@ -113,11 +114,12 @@ def changed_since(base, head):
         return None
     # A rename is listed under both names, so AGENTS.md or a
     # code file moved to a .md name still counts as changed.
+    # -z keeps names such as docs/résumé.md unquoted.
     code, out = git('diff', '--name-only', '--no-renames',
-                    base, head)
+                    '-z', base, head)
     if code:
         return None
-    return [p for p in out.splitlines() if p.strip()]
+    return [p for p in out.split('\0') if p]
 
 
 def coverage_problem(runs, head, changed):
@@ -200,21 +202,34 @@ def pr_head(pr, repo):
               'headRefOid', '-q', '.headRefOid').strip()
 
 
-def main():
-    """Check the records and post the result on the PR."""
-    repo, pr = os.environ['REPO'], os.environ['PR']
-    issue = os.environ['ISSUE']
-    handed = os.environ['HEAD']
-    run_url = os.environ.get('RUN_URL', '')
+def confirm(pr, repo, handed):
+    """Return (met, text): Qodo's records against the head."""
     before = pr_head(pr, repo)
     git('fetch', '--no-tags', 'origin', f'pull/{pr}/head')
     runs = qodo_runs(pr, repo)
     # Read again: a push while the records were read would
     # leave the newest commit unchecked.
     after = pr_head(pr, repo)
-    met, text = verdict(
-        runs, handed, [before, after],
-        lambda base: changed_since(base, after))
+    return verdict(runs, handed, [before, after],
+                   lambda base: changed_since(base, after))
+
+
+def checked(pr, repo, handed):
+    """Run confirm(); any error is a gate not met, with why."""
+    try:
+        return confirm(pr, repo, handed)
+    except Exception as error:  # noqa: BLE001
+        return False, ('The records check itself failed, so '
+                       'the gate is not confirmed: '
+                       f'{error!r}'[:500])
+
+
+def main():
+    """Check the records and post the result on the PR."""
+    repo, pr = os.environ['REPO'], os.environ['PR']
+    issue = os.environ['ISSUE']
+    run_url = os.environ.get('RUN_URL', '')
+    met, text = checked(pr, repo, os.environ['HEAD'])
     if met:
         body = ('**Gate confirmed in Qodo\'s records.** '
                 f'{text} Ready for a human to review and merge.')
