@@ -175,6 +175,13 @@ violation, Requirement gap).
 - The final report lists each finding with its type, severity, and
   what was done; the checks run; and the commit the latest completed
   review covers, which must be the head commit.
+- "Covers" means Qodo's review records show a complete review of
+  that commit. A PR comment that names the commit is not enough:
+  Qodo names it even when it skipped the commit. A skipped or
+  incomplete review of the head counts only when the last complete
+  review covers an earlier commit of the same branch and every file
+  changed since is Markdown other than `AGENTS.md`; the report names
+  both commits.
 - Report the task as not done, with the reason, if a High or Medium
   finding is still open or disputed, a check failed, the latest
   review does not cover the head commit, or fix rounds stop making
