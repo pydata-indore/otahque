@@ -550,7 +550,8 @@ def appended(path, old, text):
     if not base:
         return text
     # A retry may resend a block written on an earlier attempt.
-    if base.endswith(text.rstrip('\n')):
+    added = text.rstrip('\n')
+    if base == added or base.endswith('\n' + added):
         return old
     gap = '\n\n\n' if path.endswith('.py') else '\n\n'
     return base + gap + text
