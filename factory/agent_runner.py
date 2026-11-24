@@ -7,6 +7,7 @@ See factory/README.md.
 """
 
 import ast
+import hashlib
 import html
 import json
 import os
@@ -14,6 +15,7 @@ import posixpath
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -28,6 +30,8 @@ REPO = os.environ['REPO']
 RUN_URL = os.environ.get('RUN_URL', '')
 MAX_ATTEMPTS = int(os.environ.get('MAX_ATTEMPTS', '3'))
 REVIEW_ROUNDS = int(os.environ.get('REVIEW_ROUNDS', '2'))
+LOCAL_REVIEW_ROUNDS = int(
+    os.environ.get('LOCAL_REVIEW_ROUNDS', '2'))
 QODO_WAIT = 60 * int(os.environ.get('QODO_WAIT_MINUTES', '20'))
 MAX_LINE = 65
 # Stop with a reason before the job's own timeout kills us.
@@ -1620,6 +1624,38 @@ def main():
         report = edit_loop(messages, no_test_edits,
                            run_checks, 'Code (criteria)')
 
+    before_local = snapshot()
+    local, changed, undo_local = local_review(
+        issue, messages, can_fix=bool(before_local))
+    ok, after_report = run_checks()
+    problem = '' if ok else 'the checks failed'
+    rechecked = None
+    if ok and changed:
+        # The fixes changed the code the criteria were judged on.
+        rechecked = accept(issue, after_report, red)
+        unmet = [str(c['n']) for c in rechecked['criteria']
+                 if not c['met']]
+        if unmet:
+            problem = 'criteria ' + ', '.join(unmet) + ' failed'
+    if problem and before_local:
+        # Advisory: undo every local fix, keep the checked code.
+        restore(before_local)
+        ok, after_report = run_checks()
+        rechecked = None
+        local = undo_local(problem)
+    if not ok:
+        raise Blocked('The checks fail after the local review:\n'
+                      + fence(after_report))
+    report = after_report
+    if rechecked:
+        checked = rechecked
+        rows = '\n'.join(
+            f'| {c["n"]} | {criterion_label(c, ticket)} | '
+            f'{"Met" if c["met"] else "NOT met"}: '
+            f'{c["observed"]} |' for c in checked['criteria'])
+        log('| # | Criterion | Observed |\n|---|---|---|\n'
+            + rows)
+
     sha = commit(checked['commit'])
     push(branch)
     log(f'\n- Commit `{sha}` pushed to `{branch}`')
@@ -1634,7 +1670,7 @@ def main():
         f'{rows}\n\n## Checks run\n\nUbuntu 24.04 (GitHub '
         'Actions), uv with the locked environment:\n\n'
         f'{fence(report)}\n\nNot run: Windows, macOS; '
-        '`npm run build`.\n\nPlease review against '
+        f'`npm run build`.\n\n{local}\n\nPlease review against '
         '`docs/STANDARDS.md` and the ticket: 65-character '
         'lines, chapter order, escaping. A human decides '
         'whether to merge.\n')
@@ -1822,8 +1858,12 @@ def gate_report(rows, low, gate_met, reason, reviewed, head):
     return '\n'.join(lines)
 
 
-def triage(issue, gate, findings):
-    """Ask the model to confirm or dispute each gate finding."""
+def triage(issue, gate, findings, changes=None):
+    """Ask the model to confirm or dispute each gate finding.
+
+    changes is the diff to judge against; by default the PR's
+    diff from main, or the working tree's before a commit.
+    """
     listed = '\n'.join(
         f'{n}. [{f["severity"]} {f["type"]}] {f["title"]} '
         f'({f["where"]})' for n, f in enumerate(gate, 1))
@@ -1832,7 +1872,8 @@ def triage(issue, gate, findings):
             'Answer ONLY')[0] + 'Answer with one JSON object.'},
         {'role': 'user', 'content': (
             f'# Ticket\n{issue["body"]}\n\n# Diff\n'
-            f'{diff_from_main()}\n\n# Qodo review\n{findings}'
+            + (diff_from_main() if changes is None else changes)
+            + f'\n\n# Qodo review\n{findings}'
             '\n\n# Findings to judge (High and Medium only)\n'
             f'{listed}\n\nText between ~~ marks is already '
             'resolved. Investigate each numbered finding '
@@ -1859,6 +1900,333 @@ def triage(issue, gate, findings):
     # A finding the model skipped is treated as valid.
     return [verdicts.get(n, ('confirmed', 'not judged'))
             for n in range(1, len(gate) + 1)]
+
+
+# ---------- the local Qodo review, before the commit ----------
+
+# Qodo's action levels, read as the gate's severities. An unknown
+# level counts as High, like an unreadable severity on the PR.
+LEVELS = {'action_required': 'High',
+          'remediation_recommended': 'Medium',
+          'informational': 'Low'}
+LOCAL_WAIT = 15 * 60
+
+
+class QodoUnavailable(Exception):
+    """The Qodo CLI cannot be used for this run."""
+
+
+def qodo(*args, timeout=120):
+    """Run the pinned Qodo CLI; return (code, stdout, stderr).
+
+    It gets the Qodo key and no GitHub token. Its hash is
+    checked before every call, as generated code has run on
+    this machine (as the sandbox user) by now.
+    """
+    key = os.environ.get('QODO_API_KEY', '')
+    cli = os.environ.get('QODO_CLI_JS', '')
+    if not key or not cli:
+        raise QodoUnavailable('no Qodo key or CLI in this job')
+    try:
+        digest = hashlib.sha256(
+            Path(cli).read_bytes()).hexdigest()
+    except OSError:
+        digest = ''
+    if digest != os.environ.get('QODO_SHA256', ''):
+        raise QodoUnavailable('the Qodo CLI does not match its '
+                              'pinned hash')
+    env = safe_env()
+    env.update(QODO_API_KEY=key,
+               QODO_BASE_URL=os.environ.get('QODO_BASE_URL', ''),
+               QODO_DISABLE_AUTOUPDATE='1',
+               QODO_DISABLE_SKILLS_AUTOUPDATE='1',
+               QODO_NO_KEYCHAIN='1')
+    try:
+        done = subprocess.run(
+            ['node', cli, *args], cwd=ROOT, env=env,
+            capture_output=True, text=True, timeout=timeout,
+            encoding='utf-8', errors='replace')
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise QodoUnavailable(f'the Qodo CLI failed: {error!r}')
+    return done.returncode, done.stdout or '', done.stderr or ''
+
+
+def qodo_json(text):
+    """Return the JSON object in the CLI's output, or None."""
+    try:
+        data = json.loads(text[text.find('{'):])
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def run_local_review(issue, round_):
+    """Review the uncommitted change; return Qodo's result."""
+    url = f'https://github.com/{REPO}/issues/{ISSUE}'
+    context = {
+        'notes': (f'Written by the agent runner for #{ISSUE}. '
+                  'The checks pass on this working tree: '
+                  'manage.py check, test, makemigrations '
+                  '--check, and the 65-character limit.'),
+        'recent_work': [f'Local review round {round_} of the '
+                        'change for the ticket.'],
+        'context_refs': [{'kind': 'ticket', 'url': url}],
+    }
+    # A private folder: the sandbox user could otherwise create
+    # a fixed /tmp path first and block the write.
+    try:
+        folder = Path(tempfile.mkdtemp(prefix='qodo-'))
+        path = folder / 'context.json'
+        path.write_text(json.dumps(context), encoding='utf-8')
+    except OSError as error:
+        raise QodoUnavailable(
+            f'the context file could not be written: {error!r}')
+    code, out, err = qodo(
+        'review', '--base', BASE, '--ticket', url,
+        '--context-file', str(path), '--async', '--json',
+        timeout=300)
+    started = qodo_json(out) or {}
+    operation = started.get('operation_id')
+    if code or not isinstance(operation, str):
+        raise QodoUnavailable('the review was not accepted: '
+                              + tail(err or out, 5))
+    deadline = min(time.time() + LOCAL_WAIT, RUN_DEADLINE)
+    while time.time() < deadline:
+        code, out, err = qodo('review', 'status', operation,
+                              '--json')
+        if code == 0:
+            return qodo_json(out)
+        if code != 2:
+            raise QodoUnavailable('the review failed: '
+                                  + tail(err or out, 5))
+        time.sleep(20)
+    raise QodoUnavailable('the review did not finish in time')
+
+
+def local_findings(result):
+    """Return a local review's open findings, or None.
+
+    None unless Qodo says both its coverage and its finding
+    list are complete, so a partial review never looks clean.
+    """
+    if not isinstance(result, dict):
+        return None
+    meta = result.get('meta')
+    state = result.get('finding_state')
+    if not (isinstance(meta, dict) and isinstance(state, dict)):
+        return None
+    coverage = meta.get('coverage')
+    if not (isinstance(coverage, dict)
+            and coverage.get('complete') is True
+            and state.get('complete') is True):
+        return None
+    lists = [state.get('introduced'), state.get('still_open')]
+    if not all(isinstance(x, list) for x in lists):
+        return None
+    open_ids = set(lists[0]) | set(lists[1])
+    findings = result.get('findings')
+    if not isinstance(findings, list):
+        return None
+    found = []
+    for f in findings:
+        if not isinstance(f, dict):
+            return None
+        if f.get('id') not in open_ids:
+            continue
+        where = f.get('location')
+        if not isinstance(where, dict):
+            where = {}
+        found.append({
+            'id': f.get('id'),
+            'title': str(f.get('title') or 'Untitled'),
+            'severity': LEVELS.get(f.get('action_level'),
+                                   'High'),
+            'type': str(f.get('category') or 'Finding'),
+            'where': f'{where.get("file_path", "?")}:'
+                     f'{where.get("start_line", "?")}',
+            'description': str(
+                f.get('description') or '')[:1500],
+        })
+    return found
+
+
+def local_text(found):
+    """The findings as text for the triage and the fixes."""
+    return '\n\n'.join(
+        f'[{f["severity"]} {f["type"]}] {f["title"]} '
+        f'({f["where"]})\n{f["description"]}' for f in found)
+
+
+def snapshot():
+    """Record the working tree, to undo failed fixes, or None.
+
+    None if any step failed: a tree that might miss changes
+    must never be restored over them.
+    """
+    added, _ = run(['git', 'add', '-A', '--', '.',
+                    ':!factory-log.md'])
+    code, tree = run(['git', 'write-tree'])
+    reset, _ = run(['git', 'reset', '-q'])
+    tree = tree.strip()
+    if added or code or reset or not re.fullmatch(
+            r'[0-9a-f]{40,64}', tree):
+        return None
+    return tree
+
+
+def restore(tree):
+    """Put the working tree back as snapshot() recorded it."""
+    run(['git', 'read-tree', '-u', '--reset', tree])
+    run(['git', 'clean', '-fdq', '--', '.',
+         ':!factory-log.md'])
+    run(['git', 'reset', '-q'])
+
+
+def local_section(rows, low, note):
+    """Return the PR description's local review section.
+
+    rows are (round, finding, verdict, reason, action).
+    """
+    lines = ['## Local Qodo review', '',
+             'Reviewed with Qodo before the commit, on the '
+             'uncommitted change.', '']
+    if rows:
+        lines += ['| Round | Finding | Type | Severity '
+                  '| Verdict | Why | Action |',
+                  '|---|---|---|---|---|---|---|']
+        lines += [
+            f'| {r} | {f["title"]} ({f["where"]}) | {f["type"]} '
+            f'| {f["severity"]} | {v} | '
+            + why.replace('|', '/').replace('\n', ' ')
+            + f' | {action} |'
+            for r, f, v, why, action in rows]
+        lines.append('')
+    lines += ['Low findings, left unchanged for a human:']
+    lines += [f'- {f["title"]} ({f["type"]}, {f["where"]})'
+              for f in low] or ['- None.']
+    lines += ['', note or 'No High or Medium finding is left '
+              'open from the local review.']
+    return '\n'.join(lines)
+
+
+def local_review(issue, messages, can_fix=True):
+    """Review the change with Qodo before the commit.
+
+    Confirmed High and Medium findings are fixed, then the
+    change is reviewed again; disputed ones and Lows are listed
+    for a human. Return (PR section, whether anything was
+    fixed, undo), where undo(reason) gives the section to use
+    if main() rolls every local fix back. Without can_fix the
+    findings are only listed: main() had no snapshot to undo
+    them with. Nothing here stops the run: the PR review and the
+    confirm job are the gate.
+    """
+    rows, low, fixed = [], {}, False
+    applied = ('Fixed', 'Fix attempted',
+               'Still open after the fix')
+
+    def undo(reason):
+        shown = [(r, f, v, w, 'Undone with the rollback'
+                  if a in applied else a)
+                 for r, f, v, w, a in rows]
+        return local_section(shown, list(low.values()), (
+            f'The local fixes were undone because {reason} '
+            'with them; the code is as it was before the local '
+            'review, and the PR review checks these findings.'))
+
+    def section(note=''):
+        shown = [(r, f, v, w, 'Fix applied; not reviewed again'
+                  if a == 'Fix attempted' else a)
+                 for r, f, v, w, a in rows]
+        return local_section(shown, list(low.values()),
+                             note), fixed, undo
+
+    def reviewed_again(open_ids):
+        rows[:] = [(r, f, v, w, (
+            'Still open after the fix' if f['id'] in open_ids
+            else 'Fixed') if a == 'Fix attempted' else a)
+            for r, f, v, w, a in rows]
+
+    for round_ in range(1, LOCAL_REVIEW_ROUNDS + 2):
+        log(f'### 4b.{round_} Local Qodo review')
+        try:
+            found = local_findings(
+                run_local_review(issue, round_))
+        except QodoUnavailable as why:
+            log(f'- Not run: {why}')
+            return section(
+                f'The local review did not run: {why}. The PR '
+                'review and the confirm job are still the gate.')
+        if found is None:
+            return section(
+                'The local review result was incomplete or '
+                'unreadable, so it was not used. The PR review '
+                'is still the gate.')
+        reviewed_again({f['id'] for f in found})
+        gate = [f for f in found if f['severity'] != 'Low']
+        for f in found:
+            log(f'- {f["severity"]} {f["type"]}: {f["title"]}')
+            if f['severity'] == 'Low':
+                low.setdefault(f['id'], f)
+        if not gate:
+            return section()
+        try:
+            verdicts = triage(issue, gate, local_text(found),
+                              changes=diff())
+        except Blocked as why:
+            return section(f'The findings could not be judged: '
+                           f'{why}. The PR review checks them.')
+        fix = [f for f, (v, _) in zip(gate, verdicts)
+               if v == 'confirmed']
+        last = round_ > LOCAL_REVIEW_ROUNDS or not fix
+        start = len(rows)
+        rows += [(round_, f, v, why,
+                  'For a human' if v == 'disputed'
+                  else ('Left open: rounds ran out' if last
+                        else 'Fix attempted'))
+                 for f, (v, why) in zip(gate, verdicts)]
+        if not fix:
+            return section(
+                f'{len(gate)} High or Medium finding(s) are '
+                'disputed with evidence; a human decides each '
+                'one.')
+        if last:
+            break
+        before = snapshot() if can_fix else None
+        if not before:
+            rows[start:] = [
+                (r, f, v, w, 'Not fixed: no snapshot to undo'
+                 if a == 'Fix attempted' else a)
+                for r, f, v, w, a in rows[start:]]
+            return section(
+                'The working tree could not be recorded, so no '
+                'fix was tried. The PR review checks them.')
+        log(f'- Fixing {len(fix)} finding(s)')
+        messages.append({'role': 'user', 'content': (
+            'Qodo reviewed the uncommitted change. Fix ONLY '
+            'these High or Medium findings; keep the tests '
+            'passing. You may change tests now if a finding is '
+            'about a test. Change nothing for Low findings.\n\n'
+            + json.dumps(fix, indent=1, ensure_ascii=False)
+            + '\n\n' + migrations_note() + 'Current files:\n\n'
+            + step_files(issue))})
+        try:
+            edit_loop(messages, may_edit, run_checks,
+                      f'Local review fix {round_}')
+        except Blocked as why:
+            restore(before)
+            rows[start:] = [
+                (r, f, v, w, 'Fix failed; change undone'
+                 if a == 'Fix attempted' else a)
+                for r, f, v, w, a in rows[start:]]
+            return section(
+                f'Fixing them failed ({why}), so that round was '
+                'undone. The PR review checks them again.')
+        fixed = True
+    return section(
+        'High or Medium findings remain after '
+        f'{LOCAL_REVIEW_ROUNDS} local fix rounds; the PR review '
+        'checks them again.')
 
 
 def review(pr, branch, issue, messages, since):

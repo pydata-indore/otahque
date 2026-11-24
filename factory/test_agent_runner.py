@@ -1710,5 +1710,274 @@ class CommitPathTests(unittest.TestCase):
                          'abc1234')
         self.assertIn('commit', self.calls[-2])
 
+
+# The first local review of #47 (24 November 2026), trimmed:
+# two action-required findings and one recommended, all new.
+KEY_ID = 'a2290413-4f3d-4f2d-9606-782b6ba1727e'
+CLI_ID = '4673d4f3-b357-419f-8d9d-748fd44e2e3a'
+CRASH_ID = 'd37a93dd-8f96-4328-852e-b15e8cc38796'
+LOCAL_47 = {
+    'finding_state': {'complete': True,
+                      'introduced': [KEY_ID, CLI_ID, CRASH_ID],
+                      'still_open': [], 'resolved': [],
+                      'dismissed': []},
+    'meta': {'coverage': {'complete': True}},
+    'findings': [
+        {'id': KEY_ID,
+         'title': 'Generated code can read the Qodo key',
+         'category': 'Security',
+         'action_level': 'action_required',
+         'description': 'The key is in the runner process.',
+         'location': {'file_path': '.github/workflows/agent.yml',
+                      'start_line': 87}},
+        {'id': CLI_ID,
+         'title': 'A replaced Qodo script can receive the key',
+         'category': 'Security',
+         'action_level': 'action_required',
+         'description': 'Hash then open again.',
+         'location': {'file_path': 'factory/agent_runner.py',
+                      'start_line': 2027}},
+        {'id': CRASH_ID,
+         'title': 'Malformed review records crash the runner',
+         'category': 'Reliability',
+         'action_level': 'remediation_recommended',
+         'description': 'A null run raises.',
+         'location': {'file_path': 'factory/agent_runner.py',
+                      'start_line': 2048}},
+    ],
+}
+
+
+class LocalFindingsTests(unittest.TestCase):
+    """A local review result becomes the gate's findings."""
+
+    def test_levels_map_to_gate_severities(self):
+        found = agent_runner.local_findings(LOCAL_47)
+        self.assertEqual([f['severity'] for f in found],
+                         ['High', 'High', 'Medium'])
+        self.assertEqual(found[0]['type'], 'Security')
+        self.assertEqual(found[0]['where'],
+                         '.github/workflows/agent.yml:87')
+
+    def test_only_open_findings_count(self):
+        result = json.loads(json.dumps(LOCAL_47))
+        result['finding_state']['introduced'] = [KEY_ID]
+        result['finding_state']['resolved'] = [CLI_ID, CRASH_ID]
+        found = agent_runner.local_findings(result)
+        self.assertEqual([f['title'] for f in found],
+                         ['Generated code can read the Qodo key'])
+
+    def test_unknown_level_counts_as_high(self):
+        result = json.loads(json.dumps(LOCAL_47))
+        result['findings'][2]['action_level'] = 'mystery'
+        found = agent_runner.local_findings(result)
+        self.assertEqual(found[2]['severity'], 'High')
+
+    def test_incomplete_or_malformed_results_are_unusable(self):
+        partial = json.loads(json.dumps(LOCAL_47))
+        partial['meta']['coverage']['complete'] = False
+        unfinished = json.loads(json.dumps(LOCAL_47))
+        unfinished['finding_state']['complete'] = False
+        no_state = {k: v for k, v in LOCAL_47.items()
+                    if k != 'finding_state'}
+        odd = json.loads(json.dumps(LOCAL_47))
+        odd['meta'] = 'complete'
+        for result in (partial, unfinished, no_state, odd, None,
+                       [], {'findings': [None]}):
+            with self.subTest(result=result):
+                self.assertIsNone(
+                    agent_runner.local_findings(result))
+
+
+class LocalReviewTests(unittest.TestCase):
+    """Before the commit: fix confirmed, list the rest."""
+
+    def setUp(self):
+        self.fixed, self.results = [], []
+        self.restored = []
+        fake = {
+            'run_local_review': self.next_result,
+            'edit_loop': lambda *a: self.fixed.append(a[-1]),
+            'diff': lambda: 'working diff',
+            'snapshot': lambda: 'tree1',
+            'restore': self.restored.append,
+            'finding_files': lambda findings: '',
+            'step_files': lambda issue: '',
+            'log': lambda text: None,
+            'LOCAL_REVIEW_ROUNDS': 2,
+        }
+        for name, value in fake.items():
+            self.addCleanup(setattr, agent_runner, name,
+                            getattr(agent_runner, name))
+            setattr(agent_runner, name, value)
+        self.addCleanup(setattr, agent_runner, 'ask_json',
+                        agent_runner.ask_json)
+        use_layout(self)
+
+    def next_result(self, issue, round_):
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def only(self, *ids):
+        result = json.loads(json.dumps(LOCAL_47))
+        result['finding_state']['introduced'] = list(ids)
+        return result
+
+    def verdicts(self, *pairs):
+        replies = [{'findings': [
+            {'n': n, 'verdict': v, 'reason': 'why'}
+            for n, v in pairs]}]
+        agent_runner.ask_json = lambda messages: replies.pop(0)
+
+    def test_a_confirmed_medium_is_fixed_then_reviewed(self):
+        self.results = [self.only(CRASH_ID), self.only()]
+        self.verdicts((1, 'confirmed'))
+        section, fixed, undo = agent_runner.local_review(
+            {'body': 'T'}, [])
+        self.assertEqual(self.fixed, ['Local review fix 1'])
+        self.assertTrue(fixed)
+        self.assertIn('| Fixed |', section)
+        self.assertIn('Malformed review records crash',
+                      section)
+        self.assertIn('No High or Medium finding is left open',
+                      section)
+        rolled = undo('criteria 3 failed')
+        self.assertNotIn('| Fixed |', rolled)
+        self.assertIn('Undone with the rollback', rolled)
+        self.assertIn('criteria 3 failed', rolled)
+
+    def test_a_disputed_finding_is_left_for_a_human(self):
+        self.results = [self.only(KEY_ID)]
+        self.verdicts((1, 'disputed'))
+        section, fixed, undo = agent_runner.local_review(
+            {'body': 'T'}, [])
+        self.assertEqual(self.fixed, [])
+        self.assertFalse(fixed)
+        self.assertIn('| For a human |', section)
+        self.assertIn('disputed', section)
+        self.assertIn('a human decides', section)
+
+    def test_a_failed_fix_round_is_undone(self):
+        self.results = [self.only(CRASH_ID)]
+        self.verdicts((1, 'confirmed'))
+
+        def failing(*args):
+            raise agent_runner.Blocked('checks still fail')
+        agent_runner.edit_loop = failing
+        section, fixed, undo = agent_runner.local_review(
+            {'body': 'T'}, [])
+        self.assertEqual(self.restored, ['tree1'])
+        self.assertFalse(fixed)
+        self.assertIn('Fix failed; change undone', section)
+
+    def test_a_fix_still_open_next_round_is_not_fixed(self):
+        self.results = [self.only(CRASH_ID),
+                        self.only(CRASH_ID),
+                        self.only(CRASH_ID)]
+        self.verdicts((1, 'confirmed'))
+        replies = [{'findings': [{'n': 1, 'verdict': 'confirmed',
+                                  'reason': 'r'}]}] * 3
+        agent_runner.ask_json = lambda messages: replies[0]
+        section, _, undo = agent_runner.local_review(
+            {'body': 'T'}, [])
+        self.assertIn('Still open after the fix', section)
+        self.assertNotIn('| Fixed |', section)
+
+    def test_no_snapshot_means_no_fix(self):
+        self.results = [self.only(CRASH_ID)]
+        self.verdicts((1, 'confirmed'))
+        agent_runner.snapshot = lambda: None
+        section, fixed, undo = agent_runner.local_review(
+            {'body': 'T'}, [])
+        self.assertEqual(self.fixed, [])
+        self.assertFalse(fixed)
+        self.assertIn('no snapshot to undo', section)
+
+    def test_without_main_snapshot_nothing_is_fixed(self):
+        self.results = [self.only(CRASH_ID)]
+        self.verdicts((1, 'confirmed'))
+        section, fixed, _ = agent_runner.local_review(
+            {'body': 'T'}, [], can_fix=False)
+        self.assertEqual(self.fixed, [])
+        self.assertFalse(fixed)
+        self.assertIn('no snapshot to undo', section)
+
+    def test_lows_from_every_round_are_kept(self):
+        low = self.only(KEY_ID, CRASH_ID)
+        low['findings'][0]['action_level'] = 'informational'
+        self.results = [low, self.only()]
+        self.verdicts((1, 'confirmed'))
+        section, _, undo = agent_runner.local_review(
+            {'body': 'T'}, [])
+        self.assertIn('Generated code can read the Qodo key',
+                      section.split('Low findings')[1])
+
+    def test_a_review_that_cannot_run_is_reported(self):
+        self.results = [agent_runner.QodoUnavailable('no key')]
+        section, fixed, undo = agent_runner.local_review(
+            {'body': 'T'}, [])
+        self.assertIn('did not run: no key', section)
+        self.assertEqual(self.fixed, [])
+
+    def test_an_unusable_result_is_reported(self):
+        partial = self.only(KEY_ID)
+        partial['meta']['coverage']['complete'] = False
+        self.results = [partial]
+        section, fixed, undo = agent_runner.local_review(
+            {'body': 'T'}, [])
+        self.assertIn('incomplete or unreadable', section)
+
+
+class SnapshotTests(unittest.TestCase):
+    """A snapshot that may miss changes is never returned."""
+
+    def setUp(self):
+        self.addCleanup(setattr, agent_runner, 'run',
+                        agent_runner.run)
+
+    def test_failed_staging_gives_no_snapshot(self):
+        codes = {'add': 1, 'write-tree': 0, 'reset': 0}
+        agent_runner.run = lambda args, env=None: (
+            codes[args[1]], 'a' * 40)
+        self.assertIsNone(agent_runner.snapshot())
+
+    def test_a_full_snapshot_is_returned(self):
+        agent_runner.run = lambda args, env=None: (0, 'b' * 40)
+        self.assertEqual(agent_runner.snapshot(), 'b' * 40)
+
+
+class LocalCliTests(unittest.TestCase):
+    """The local review never runs a changed CLI."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.cli = Path(folder.name) / 'qodo.mjs'
+        self.cli.write_text('pinned', encoding='utf-8')
+        self.calls = []
+        self.addCleanup(setattr, agent_runner.subprocess, 'run',
+                        agent_runner.subprocess.run)
+        agent_runner.subprocess.run = (
+            lambda *a, **k: self.calls.append((a, k)))
+        pinned = hashlib.sha256(b'pinned').hexdigest()
+        for name, value in {'QODO_API_KEY': 'k',
+                            'QODO_CLI_JS': str(self.cli),
+                            'QODO_SHA256': pinned}.items():
+            self.addCleanup(os.environ.pop, name, None)
+            os.environ[name] = value
+
+    def test_changed_cli_is_refused(self):
+        self.cli.write_text('changed', encoding='utf-8')
+        with self.assertRaises(agent_runner.QodoUnavailable):
+            agent_runner.qodo('review', 'status', 'x')
+        self.assertEqual(self.calls, [])
+
+    def test_no_key_is_refused(self):
+        os.environ['QODO_API_KEY'] = ''
+        with self.assertRaises(agent_runner.QodoUnavailable):
+            agent_runner.qodo('review', 'status', 'x')
+
 if __name__ == '__main__':
     unittest.main()
