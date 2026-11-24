@@ -340,6 +340,20 @@ def tail(text, lines=40):
     return '\n'.join(text.strip().splitlines()[-lines:])
 
 
+def excerpt(text, lines=20):
+    """Return the first and last lines of a long report.
+
+    A traceback opens a test report and the summary closes it,
+    so a stop message keeps both ends, marking the cut.
+    """
+    rows = text.strip().splitlines()
+    if len(rows) <= 2 * lines:
+        return '\n'.join(rows)
+    return '\n'.join(rows[:lines] + [
+        f'... {len(rows) - 2 * lines} lines left out ...']
+        + rows[-lines:])
+
+
 def fence(text):
     return '```text\n' + text.strip() + '\n```'
 
@@ -1214,7 +1228,7 @@ def edit_loop(messages, allowed, verify, stage):
                     f'{stage}: the settings guard refused the '
                     'change. No retry can make it pass, so a '
                     'person makes this part:\n'
-                    + fence(tail(report, 25)))
+                    + fence(excerpt(report)))
             feedback = 'The checks failed:\n\n' + report
             if 'Lines over' in report:
                 feedback += (
@@ -1234,7 +1248,7 @@ def edit_loop(messages, allowed, verify, stage):
             + '\n\nSend corrected edit blocks.')})
     raise Blocked(
         f'{stage}: still failing after {MAX_ATTEMPTS} attempts. '
-        'The last failure:\n' + fence(tail(feedback, 25)))
+        'The last failure:\n' + fence(excerpt(feedback)))
 
 
 def ask_json(messages):
