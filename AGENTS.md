@@ -145,13 +145,16 @@ If a template or `static/otahque/source.css` changed, also run
   a defect of this change: the answer names that chapter (see "Where
   later work lands" in `docs/STANDARDS.md`, or every chapter with
   its book page in `docs/BOOK_REFERENCE.md`) and the code stays as
-  it is. A planned chapter excuses a gap only when its title names
-  that topic, and a bug in code the change adds (a wrong result, a
-  crash, lost data) is never excused. If no later chapter covers it, it is a finding now. A security
-  defect (rule 3), a failing test, and a broken rule 1 are always
-  findings, whatever the chapter. A pull request that applies one
-  book-wide change across several chapters, such as a docstring pass,
-  is one capability.
+  it is. A later chapter covers a gap only when the book or this
+  repository names it for that topic: its title, its row in "Where
+  later work lands", or a published chapter that hands the topic to
+  it (Chapter 21 hands SQLite's `LOWER()` limit to Chapter 32). If
+  no later chapter covers it, it is a finding now, and a bug in code
+  the change adds (a wrong result, a crash, lost data) is never
+  excused. A security defect (rule 3), a failing test, and a broken
+  rule 1 are always findings, whatever the chapter. A pull request
+  that applies one book-wide change across several chapters, such
+  as a docstring pass, is one capability.
 - Why: the code grows one chapter at a time and is incomplete on
   purpose. From Chapter 16 to Chapter 20, `Event` accepted an
   `ends_at` before `starts_at`, because validation and constraints
