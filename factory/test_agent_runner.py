@@ -2098,6 +2098,21 @@ class EditLoopStopTests(unittest.TestCase):
         self.assertIn('test_list_shows_drafts',
                       str(caught.exception))
 
+    def test_a_long_failure_keeps_its_traceback(self):
+        report = '\n'.join(
+            ['Traceback (most recent call last):']
+            + [f'line {n}' for n in range(80)]
+            + ['FAILED (errors=1)'])
+        with self.assertRaises(agent_runner.Blocked) as caught:
+            agent_runner.edit_loop([], None,
+                                   lambda: (False, report),
+                                   'Code')
+        message = str(caught.exception)
+        self.assertIn('Traceback (most recent call last)',
+                      message)
+        self.assertIn('FAILED (errors=1)', message)
+        self.assertIn('lines left out', message)
+
     def test_unapplied_edits_are_named_too(self):
         def refuse(reply, allowed):
             raise ValueError(
