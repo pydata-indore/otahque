@@ -784,7 +784,37 @@ def settings_problems():
 
 
 def manage(*args):
-    return run(['uv', 'run', 'python', 'manage.py', *args])
+    """Run manage.py; in Actions, as the sandbox user.
+
+    manage.py runs the generated code. As SANDBOX_USER, with an
+    empty environment, it cannot read this process's secrets
+    through /proc (agent.yml creates that user). umask 000 lets
+    the runner edit the files the commands create.
+    """
+    user = os.environ.get('SANDBOX_USER', '')
+    if not user:
+        return run(['uv', 'run', 'python', 'manage.py', *args])
+    return run(['sudo', '-n', '-u', user, '--', 'env', '-i',
+                'PATH=/usr/local/bin:/usr/bin:/bin',
+                f'HOME=/home/{user}', 'LANG=C.UTF-8',
+                '/bin/sh', '-c', 'umask 000; exec "$@"', 'sh',
+                str(ROOT / '.venv' / 'bin' / 'python'),
+                'manage.py', *args])
+
+
+def sandbox_problem():
+    """Return why the run must not start unsandboxed, or None.
+
+    In Actions the generated code must run as SANDBOX_USER, or
+    it could read the model key and the GitHub token.
+    """
+    if (os.environ.get('GITHUB_ACTIONS') == 'true'
+            and not os.environ.get('SANDBOX_USER')):
+        return ('SANDBOX_USER is not set, so the generated code '
+                'would run as the runner and could read its '
+                'secrets. agent.yml creates that user; check '
+                'its sandbox step.')
+    return None
 
 
 # Migration files makemigrations wrote in this run.
@@ -1261,10 +1291,33 @@ def git_identity():
     ]
 
 
+def unexpected_paths():
+    """Return changed paths that no step of the run may write.
+
+    The generated code ran after the last path check, during
+    the Django commands, so the tree is checked again here.
+    """
+    return [p for p in changed_paths()
+            if p != LOG.name
+            and not (may_edit(p) or tests_step_path(p)
+                     or p in GENERATED)]
+
+
 def commit(message):
     if BANNED.search(message):
         message = 'Apply the change requested in #' + ISSUE
     guard_git()
+    outside = unexpected_paths()
+    if outside:
+        raise Blocked('Files outside the allowed paths changed '
+                      'while the checks ran: '
+                      + ', '.join(outside[:20]))
+    settings = (settings_problems()
+                if SETTINGS in changed_paths() else [])
+    if settings:
+        raise Blocked("The settings changed outside the "
+                      "ticket's settings while the checks "
+                      'ran:\n' + '\n'.join(settings))
     run(['git', 'add', '-A', '--', '.', ':!factory-log.md'])
     code, out = run(
         ['git', *git_identity(), 'commit', '-q', '-m', message])
@@ -1277,14 +1330,20 @@ def commit(message):
 def push(branch):
     guard_git()
     token = os.environ['GH_TOKEN']
-    remote = (f'https://x-access-token:{token}'
-              f'@github.com/{REPO}.git')
-    # No hooks, and no token or key in the environment: the
-    # only credential is the one in the push URL.
+    # Any user can read a process's command line, so the token
+    # goes in the environment of this one git process, and a
+    # credential helper hands it to git; no hooks run.
+    helper = ('!f() { echo username=x-access-token; '
+              'echo "password=$GIT_PUSH_TOKEN"; }; f')
+    env = safe_env()
+    env['GIT_PUSH_TOKEN'] = token
     done = subprocess.run(
-        ['git', '-c', 'core.hooksPath=/dev/null', 'push',
-         remote, f'HEAD:refs/heads/{branch}'],
-        cwd=ROOT, env=safe_env(), capture_output=True,
+        ['git', '-c', 'core.hooksPath=/dev/null',
+         '-c', 'credential.helper=',
+         '-c', f'credential.helper={helper}', 'push',
+         f'https://github.com/{REPO}.git',
+         f'HEAD:refs/heads/{branch}'],
+        cwd=ROOT, env=env, capture_output=True,
         text=True, timeout=120)
     if done.returncode:
         raise Blocked('git push failed:\n'
@@ -1398,8 +1457,9 @@ def main():
     if RUN_URL:
         log(f'Run: {RUN_URL}\n')
     ensure_labels()
-    problem = token_problem(
+    problem = (token_problem(
         os.environ.get('AGENT_TOKEN_SET', ''))
+        or sandbox_problem())
     if problem:
         raise Blocked(problem)
     global GIT_STATE

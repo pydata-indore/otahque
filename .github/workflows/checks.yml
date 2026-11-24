@@ -22,6 +22,12 @@ jobs:
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      AS_SANDBOX: >-
+        sudo -n -u otahque-sandbox -- env -i
+        PATH=/usr/local/bin:/usr/bin:/bin
+        HOME=/home/otahque-sandbox LANG=C.UTF-8
+        .venv/bin/python
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,14 +48,56 @@ jobs:
             echo "DJANGO_ALLOWED_HOSTS="
           } > .env
 
+      # Generated code runs as this user and cannot read the
+      # job's secrets (factory/README.md, "The sandbox user").
+      - name: Create the sandbox user for generated code
+        run: |
+          user=otahque-sandbox
+          sudo useradd --create-home --shell /bin/sh "$user"
+          python_dir=$(uv python dir)
+          # It must reach the checkout and uv's Python.
+          for dir in "$GITHUB_WORKSPACE" "$python_dir"; do
+            p="$dir"
+            while [ "$p" != / ]; do
+              sudo chmod o+x "$p"
+              p=$(dirname "$p")
+            done
+          done
+          if [ -d "$python_dir" ]; then
+            chmod -R a+rX "$python_dir"
+          fi
+          chmod -R a+rwX "$GITHUB_WORKSPACE"
+          # Sticky, as /tmp is: it may add files at the top level
+          # (startapp) but not rename or remove the runner's.
+          chmod +t "$GITHUB_WORKSPACE"
+          # The runner's own code and Git data are out of reach;
+          # .venv stays readable so its Python can start.
+          chmod -R go-rwx .git factory .github
+          chmod -R go-w .venv
+          echo "SANDBOX_USER=$user" >> "$GITHUB_ENV"
+
+      # The same way the agent runner runs them, so every pull
+      # request shows the sandbox works.
+      - name: The sandbox cannot read this job's environment
+        run: |
+          # The user exists and can run things; only the read fails.
+          sudo -n -u otahque-sandbox true
+          proc_env="/proc/$$/environ"
+          if sudo -n -u otahque-sandbox cat "$proc_env" \
+              > /dev/null 2>&1; then
+            echo "::error::the sandbox user can read the job's env"
+            exit 1
+          fi
+          echo "Refused, as it should be."
+
       - name: Django system check
-        run: uv run python manage.py check
+        run: $AS_SANDBOX manage.py check
 
       - name: Tests (every app)
-        run: uv run python manage.py test
+        run: $AS_SANDBOX manage.py test
 
       - name: No model change without a migration
-        run: uv run python manage.py makemigrations --check --dry-run
+        run: $AS_SANDBOX manage.py makemigrations --check --dry-run
 
       - name: Agent runner tests
         run: uv run python -m unittest factory/test_agent_runner.py
