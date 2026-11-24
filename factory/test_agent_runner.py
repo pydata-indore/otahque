@@ -117,6 +117,56 @@ class ApplyEditsTests(unittest.TestCase):
                                  agent_runner.PartialEdits)
         self.assertNotIn('Applied anyway', str(caught.exception))
 
+    def test_a_symlink_is_never_written_through(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        secret = Path(outside.name) / 'runner.py'
+        secret.write_text('safe = True\n')
+        try:
+            (self.root / 'tests.py').symlink_to(secret)
+        except OSError:
+            self.skipTest('this system cannot make symlinks')
+        reply = ('FILE: tests.py\n<<<<<<< APPEND\n'
+                 'safe = False\n>>>>>>> APPEND\n')
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            self.apply(reply)
+        self.assertEqual(secret.read_text(), 'safe = True\n')
+
+    def test_a_linked_folder_is_never_written_through(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        try:
+            (self.root / 'app').symlink_to(
+                outside.name, target_is_directory=True)
+        except OSError:
+            self.skipTest('this system cannot make symlinks')
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            self.apply(block('app/new.py', '', 'x = 1\n'))
+        self.assertFalse(
+            (Path(outside.name) / 'new.py').exists())
+
+    def test_every_bad_block_in_a_file_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\ny = 1\n')
+        reply = (block('a.py', 'nope\n', 'z\n')
+                 + block('a.py', 'x = 1\n', 'x = 2\n')
+                 + block('a.py', 'also nope\n', 'w\n'))
+        with self.assertRaises(ValueError) as caught:
+            self.apply(reply)
+        message = str(caught.exception)
+        self.assertIn('nope', message)
+        self.assertIn('also nope', message)
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 1\ny = 1\n')
+
+    def test_a_resent_append_is_not_added_twice(self):
+        (self.root / 'tests.py').write_text('class A:\n    pass\n')
+        reply = ('FILE: tests.py\n<<<<<<< APPEND\n'
+                 'class B:\n    pass\n>>>>>>> APPEND\n')
+        self.apply(reply)
+        self.apply(reply)
+        text = (self.root / 'tests.py').read_text()
+        self.assertEqual(text.count('class B:'), 1)
+
     def test_one_bad_block_keeps_its_file_unchanged(self):
         (self.root / 'a.py').write_text('x = 1\ny = 1\n')
         reply = (block('a.py', 'x = 1\n', 'x = 2\n')
