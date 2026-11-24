@@ -161,7 +161,13 @@ logs it and continues without the rest.
 
 ## Limits and stopping
 
-- Up to 3 attempts per step (`MAX_ATTEMPTS`).
+- Up to 3 attempts per step (`MAX_ATTEMPTS`). A settings guard
+  refusal ends the step at once, since no retry can make a
+  setting the ticket does not open pass. In the code steps that
+  stops the run, and that part goes to a person; in a local
+  review fix the round is undone and the run goes on with the
+  code that passed. When a step runs out of attempts, the issue
+  comment names the last failure.
 - Up to 2 rounds of review fixes (`REVIEW_ROUNDS`).
 - 20 minutes to wait for Qodo (`QODO_WAIT_MINUTES`).
 - 75 minutes for the runner (`RUN_MINUTES`), inside the job's

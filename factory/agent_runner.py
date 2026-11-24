@@ -926,7 +926,7 @@ def run_checks(baseline=False):
     if settings:
         passed = False
         report.append(
-            'Settings changes not allowed. The ticket opens '
+            GUARD_REFUSED + '. The ticket opens '
             + (', '.join(STEPS['settings']) or 'no setting')
             + '; ' + ', '.join(PROTECTED) + ', imports, and '
             'the try block are never open:\n'
@@ -1178,11 +1178,19 @@ def project_brief(issue):
            if REFERENCE_TEXT else ''))
 
 
+# The settings guard's refusal, as run_checks() reports it.
+GUARD_REFUSED = 'Settings changes not allowed'
+
+
 def edit_loop(messages, allowed, verify, stage):
     """Ask, apply, verify; retry with feedback up to the limit.
 
     verify() returns (ok, report). Returns the last report.
+    A settings guard refusal stops at once: no retry can make
+    a setting the ticket does not open pass. Running out of
+    attempts names the last failure, for the issue comment.
     """
+    feedback = ''
     for attempt in range(1, MAX_ATTEMPTS + 1):
         out_of_time()
         log(f'- {stage}: attempt {attempt} of {MAX_ATTEMPTS}')
@@ -1201,6 +1209,12 @@ def edit_loop(messages, allowed, verify, stage):
             ok, report = verify()
             if ok:
                 return report
+            if GUARD_REFUSED in report:
+                raise Blocked(
+                    f'{stage}: the settings guard refused the '
+                    'change. No retry can make it pass, so a '
+                    'person makes this part:\n'
+                    + fence(tail(report, 25)))
             feedback = 'The checks failed:\n\n' + report
             if 'Lines over' in report:
                 feedback += (
@@ -1219,7 +1233,8 @@ def edit_loop(messages, allowed, verify, stage):
             + retry_text(retry_files(reply, allowed))
             + '\n\nSend corrected edit blocks.')})
     raise Blocked(
-        f'{stage}: still failing after {MAX_ATTEMPTS} attempts.')
+        f'{stage}: still failing after {MAX_ATTEMPTS} attempts. '
+        'The last failure:\n' + fence(tail(feedback, 25)))
 
 
 def ask_json(messages):
