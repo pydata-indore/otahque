@@ -273,6 +273,15 @@ class ApplyEditsTests(unittest.TestCase):
         self.assertEqual((self.root / 'b.py').read_text(),
                          'y = 1\n')
 
+    def test_a_file_line_inside_text_is_kept(self):
+        (self.root / 'notes.md').write_text('# Format\n')
+        reply = ('FILE: notes.md\n<<<<<<< APPEND\n'
+                 'FILE: example.py\nis how a block starts.\n'
+                 '>>>>>>> APPEND\n')
+        self.apply(reply)
+        self.assertIn('FILE: example.py',
+                      (self.root / 'notes.md').read_text())
+
     def test_markdown_keeps_such_a_line(self):
         (self.root / 'notes.md').write_text('# Notes\n')
         self.apply('FILE: notes.md\n<<<<<<< APPEND\n'
@@ -2384,6 +2393,29 @@ class EditLoopStopTests(unittest.TestCase):
                                    lambda: (False, report),
                                    'Tests')
         self.assertEqual(self.asked, 5)
+
+    def test_a_cut_off_reply_that_passes_asks_for_more(self):
+        replies = iter(['edits', 'DONE'])
+        agent_runner.ask = lambda messages: next(replies)
+        self.addCleanup(setattr, agent_runner, 'LAST_FINISH',
+                        None)
+        finishes = iter(['length', 'stop'])
+
+        def apply(reply, allowed):
+            agent_runner.LAST_FINISH = next(finishes)
+            return ['x.py']
+        agent_runner.apply_edits = apply
+        checks = []
+
+        def verify():
+            checks.append(1)
+            return True, 'OK'
+        messages = []
+        report = agent_runner.edit_loop(messages, None, verify,
+                                        'Tests')
+        self.assertEqual(report, 'OK')
+        self.assertEqual(len(checks), 2)
+        self.assertIn('DONE', messages[-1]['content'])
 
     def test_unapplied_edits_are_named_too(self):
         def refuse(reply, allowed):
