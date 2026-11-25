@@ -29,6 +29,12 @@ ISSUE = os.environ['ISSUE']
 REPO = os.environ['REPO']
 RUN_URL = os.environ.get('RUN_URL', '')
 MAX_ATTEMPTS = int(os.environ.get('MAX_ATTEMPTS', '3'))
+# The tests step writes the most text; each attempt keeps its
+# good files (#62), so it may take a few more (#55, run 4).
+TEST_ATTEMPTS = int(os.environ.get('TEST_ATTEMPTS', '5'))
+# Why the model's last reply ended: 'length' means it was cut
+# off at the output limit (MAX_TOKENS).
+LAST_FINISH = None
 REVIEW_ROUNDS = int(os.environ.get('REVIEW_ROUNDS', '2'))
 LOCAL_REVIEW_ROUNDS = int(
     os.environ.get('LOCAL_REVIEW_ROUNDS', '2'))
@@ -387,7 +393,13 @@ def ask(messages):
                 request, timeout=300,
             ) as response:
                 reply = json.load(response)
-            text = reply['choices'][0]['message']['content']
+            choice = reply['choices'][0]
+            text = choice['message']['content']
+            global LAST_FINISH
+            LAST_FINISH = choice.get('finish_reason')
+            if LAST_FINISH == 'length':
+                log('- The reply hit the output limit '
+                    '(MAX_TOKENS) and was cut off.')
             messages.append(
                 {'role': 'assistant', 'content': text})
             return text
@@ -419,6 +431,10 @@ EDIT = re.compile(
 )
 
 
+# Every FILE: line, whether or not a complete block follows.
+BLOCK_START = re.compile(r'^FILE: *(?P<path>\S+) *$', re.M)
+
+
 class PartialEdits(ValueError):
     """Some files' edits were applied, others were not."""
 
@@ -442,10 +458,40 @@ def apply_edits(text, allowed):
     PartialEdits, listing what was written, if any file failed.
     """
     edits = list(EDIT.finditer(text))
-    if not edits:
+    # A block with no closing marker matches nothing; it is named
+    # as cut off, never dropped without a word (#55, run 4).
+    starts = list(BLOCK_START.finditer(text))
+    cut = [s['path'] for s in starts
+           if not any(e.start() <= s.start() < e.end()
+                      for e in edits)]
+    # A block missing its ======= line runs on into the next
+    # FILE: block; both are named, neither is applied.
+    swallowed = []
+    for e in edits:
+        inner = [s['path'] for s in starts
+                 if e.start() < s.start() < e.end()]
+        if inner:
+            swallowed.append((e['path'], inner))
+    if not edits and not cut:
         raise ValueError(
             'No FILE/SEARCH/REPLACE or APPEND blocks found.')
     pending, errors, failed = {}, [], set()
+    for path in dict.fromkeys(cut):
+        errors.append(
+            f'The block for {path} was cut off before its '
+            'closing marker, so no edit to that file was '
+            'applied; send all its blocks again.')
+        failed.add(path)
+    for path, inner in swallowed:
+        errors.append(
+            f'The block for {path} is missing a marker line '
+            '(=======, >>>>>>> REPLACE or >>>>>>> APPEND), so '
+            'it ran into the block for ' + ', '.join(inner)
+            + '; none of them was applied.')
+        failed.add(path)
+        failed.update(inner)
+    edits = [e for e in edits
+             if not any(e['path'] == p for p, _ in swallowed)]
     for edit in edits:
         # A failed block leaves its file's pending text as it
         # was, so the file's later blocks are still checked and
@@ -1321,7 +1367,8 @@ def project_brief(issue):
 GUARD_REFUSED = 'Settings changes not allowed'
 
 
-def edit_loop(messages, allowed, verify, stage):
+def edit_loop(messages, allowed, verify, stage,
+              attempts=None):
     """Ask, apply, verify; retry with feedback up to the limit.
 
     verify() returns (ok, report). Returns the last report.
@@ -1330,9 +1377,11 @@ def edit_loop(messages, allowed, verify, stage):
     attempts names the last failure, for the issue comment.
     """
     feedback = ''
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    limit = attempts or (TEST_ATTEMPTS if stage == 'Tests'
+                         else MAX_ATTEMPTS)
+    for attempt in range(1, limit + 1):
         out_of_time()
-        log(f'- {stage}: attempt {attempt} of {MAX_ATTEMPTS}')
+        log(f'- {stage}: attempt {attempt} of {limit}')
         reply = ask(messages)
         reason = blocked_reason(reply)
         if reason:
@@ -1374,13 +1423,21 @@ def edit_loop(messages, allowed, verify, stage):
                     'matches exactly once. Count the '
                     'characters; do not change other lines.')
             log('  - Checks failed:\n' + fence(tail(report, 25)))
+        if LAST_FINISH == 'length':
+            feedback = (
+                'Your reply hit the output limit and was cut '
+                'off. Send fewer blocks per reply. Files named '
+                'below as cut off kept none of your edits: '
+                'send all their blocks again. Files listed '
+                'under "Applied anyway" are written.\n\n'
+                + feedback)
         messages.append({'role': 'user', 'content': (
             feedback + '\n\nCurrent files you changed or tried '
             'to change (copy SEARCH text only from these):\n\n'
             + retry_text(retry_files(reply, allowed))
             + '\n\nSend corrected edit blocks.')})
     raise Blocked(
-        f'{stage}: still failing after {MAX_ATTEMPTS} attempts. '
+        f'{stage}: still failing after {limit} attempts. '
         'The last failure:\n' + fence(excerpt(feedback)))
 
 
