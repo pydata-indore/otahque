@@ -401,9 +401,10 @@ def keep_reply(text, finish):
                        re.findall(r'`+', text)])
     # A log file must never stop the run it records.
     try:
-        # A character UTF-8 cannot hold is kept as '?'.
+        # A character UTF-8 cannot hold is kept as its escape,
+        # such as \udc80, so the file still shows what was sent.
         with open(path, 'a', encoding='utf-8',
-                  errors='replace') as f:
+                  errors='backslashreplace') as f:
             f.write(f'## Reply at {now():%H:%M:%S} UTC '
                     f'(finish_reason: {finish})\n\n'
                     + '`' * ticks + 'text\n'

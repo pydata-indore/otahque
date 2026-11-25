@@ -522,7 +522,7 @@ class ReplyLogTests(unittest.TestCase):
         env = {'REPLIES': str(self.path)}
         with mock.patch.dict(os.environ, env):
             agent_runner.keep_reply('a \udc80 b', 'stop')
-        self.assertIn('a ? b',
+        self.assertIn('a \\udc80 b',
                       self.path.read_text(encoding='utf-8'))
 
     def test_ask_keeps_the_raw_reply(self):
