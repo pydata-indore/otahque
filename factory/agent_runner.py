@@ -401,7 +401,9 @@ def keep_reply(text, finish):
                        re.findall(r'`+', text)])
     # A log file must never stop the run it records.
     try:
-        with open(path, 'a', encoding='utf-8') as f:
+        # A character UTF-8 cannot hold is kept as '?'.
+        with open(path, 'a', encoding='utf-8',
+                  errors='replace') as f:
             f.write(f'## Reply at {now():%H:%M:%S} UTC '
                     f'(finish_reason: {finish})\n\n'
                     + '`' * ticks + 'text\n'
@@ -536,6 +538,11 @@ def block_problem(path, region, last):
         return (f'The block for {path} has an indented marker '
                 f'line, "{indented[0][:60]}"; marker lines '
                 'start at the beginning of the line' + again)
+    if (kind == 'SEARCH' and closer in body
+            and '=======' in body[body.index(closer):]):
+        return (f'The SEARCH block for {path} has its ======= '
+                f'line after {closer}; the order is SEARCH, '
+                f'=======, then {closer}' + again)
     if kind == 'SEARCH' and closer in body:
         return (f'The SEARCH block for {path} has no ======= '
                 'line between its SEARCH and REPLACE parts'
@@ -587,7 +594,8 @@ def apply_edits(text, allowed):
             continue
         stop = next((m for m in marks if m > s.start()),
                     len(text))
-        unread.setdefault(s['path'], block_problem(
+        # Every problem, so one retry can fix them all.
+        unread.setdefault(s['path'], []).append(block_problem(
             s['path'], text[s.start():stop],
             not text[stop:].strip()))
     cut = list(unread)
@@ -604,8 +612,8 @@ def apply_edits(text, allowed):
         raise ValueError(
             'No FILE/SEARCH/REPLACE or APPEND blocks found.')
     pending, errors, failed = {}, [], set()
-    for path, problem in unread.items():
-        errors.append(problem)
+    for path, problems in unread.items():
+        errors.extend(dict.fromkeys(problems))
         failed.add(path)
     for path, inner in swallowed:
         errors.append(
