@@ -2461,7 +2461,9 @@ class TicketFilesTests(unittest.TestCase):
 
     def test_a_path_outside_the_checkout_is_refused(self):
         for bad in ('../secret.py', '/etc/passwd',
-                    'events\\admin.py', '..\\x.py'):
+                    'events\\admin.py', '..\\x.py',
+                    'C:/secrets.py', 'C:config.py',
+                    'events/../../x.py'):
             with self.subTest(bad=bad):
                 with self.assertRaises(agent_runner.Blocked):
                     agent_runner.runner_steps(
@@ -2476,6 +2478,11 @@ class TicketFilesTests(unittest.TestCase):
             agent_runner.tests_step_path('events/tests.py'))
         self.assertFalse(
             agent_runner.tests_step_path('config/tests.py'))
+
+    def test_a_dotted_path_is_normalised(self):
+        steps = agent_runner.runner_steps(
+            '## Runner\n\n- files: ./events/admin.py\n')
+        self.assertEqual(steps['files'], ['events/admin.py'])
 
     def test_startapp_files_stay_in_scope(self):
         agent_runner.STEPS = agent_runner.runner_steps(self.BODY)

@@ -237,6 +237,23 @@ STEP_SETTINGS = re.compile(
 STEP_FILES = re.compile(r'files: *(\S+(?:, *\S+)*)')
 
 
+def ticket_path(path):
+    """Return a files: path as the runner compares it.
+
+    ./events/admin.py becomes events/admin.py. An absolute path,
+    a drive letter, a backslash, or one that climbs out of the
+    repository stops the run before any model call.
+    """
+    clean = posixpath.normpath(path)
+    if (':' in path or '\\' in path or clean.startswith('/')
+            or clean == '..' or clean.startswith('../')):
+        raise Blocked(
+            f'The Runner section lists {path}; a file must be a '
+            'path inside the repository, such as '
+            'events/admin.py.')
+    return clean
+
+
 def runner_steps(body):
     """Return what the ticket's Runner section asks for.
 
@@ -280,13 +297,7 @@ def runner_steps(body):
             steps['settings'] += wanted
         elif files:
             for path in re.split(r', *', files[1]):
-                if (path.startswith('/') or '..' in path
-                        or '\\' in path):
-                    raise Blocked(
-                        f'The Runner section lists {path}; a '
-                        'file must be a path inside the '
-                        'repository.')
-                steps['files'].append(path)
+                steps['files'].append(ticket_path(path))
         else:
             raise Blocked(
                 f'The Runner section has a line I cannot use: '
