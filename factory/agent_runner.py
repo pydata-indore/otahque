@@ -433,6 +433,10 @@ EDIT = re.compile(
 
 # Every FILE: line, whether or not a complete block follows.
 BLOCK_START = re.compile(r'^FILE: *(?P<path>\S+) *$', re.M)
+# A FILE: line that opens a block, as a swallowed block shows.
+BLOCK_OPEN = re.compile(
+    r'^FILE: *(?P<path>\S+) *\n<<<<<<< (?:SEARCH|APPEND)$',
+    re.M)
 
 
 class PartialEdits(ValueError):
@@ -466,9 +470,10 @@ def apply_edits(text, allowed):
                       for e in edits)]
     # A block missing its ======= line runs on into the next
     # FILE: block; both are named, neither is applied.
+    opens = list(BLOCK_OPEN.finditer(text))
     swallowed = []
     for e in edits:
-        inner = [s['path'] for s in starts
+        inner = [s['path'] for s in opens
                  if e.start() < s.start() < e.end()]
         if inner:
             swallowed.append((e['path'], inner))
@@ -1379,6 +1384,9 @@ def edit_loop(messages, allowed, verify, stage,
     feedback = ''
     limit = attempts or (TEST_ATTEMPTS if stage == 'Tests'
                          else MAX_ATTEMPTS)
+    # True after a cut-off reply whose edits passed the checks:
+    # the end of that reply is missing, so ask before moving on.
+    unfinished = False
     for attempt in range(1, limit + 1):
         out_of_time()
         log(f'- {stage}: attempt {attempt} of {limit}')
@@ -1386,6 +1394,11 @@ def edit_loop(messages, allowed, verify, stage,
         reason = blocked_reason(reply)
         if reason:
             raise Blocked(f'{stage}: the agent said: {reason}')
+        if unfinished and reply.strip() == 'DONE':
+            ok, report = verify()
+            if ok:
+                return report
+        unfinished = False
         try:
             changed = apply_edits(reply, allowed)
         except PartialEdits as error:
@@ -1403,15 +1416,28 @@ def edit_loop(messages, allowed, verify, stage,
             names = ', '.join(sorted(set(changed)))
             log(f'  - Changed: {names}')
             ok, report = verify()
-            if ok:
+            if ok and LAST_FINISH != 'length':
                 return report
+            if ok:
+                unfinished = True
+                feedback = (
+                    'Your reply hit the output limit and was '
+                    'cut off. The checks pass on what '
+                    'arrived, but the end of your reply is '
+                    'missing. Send any blocks still missing, '
+                    'or reply with the single word DONE if '
+                    'nothing is missing.')
+                log('  - Cut-off reply passed the checks; asked '
+                    'for the rest.')
+                report = ''
             if GUARD_REFUSED in report:
                 raise Blocked(
                     f'{stage}: the settings guard refused the '
                     'change. No retry can make it pass, so a '
                     'person makes this part:\n'
                     + fence(excerpt(report)))
-            feedback = 'The checks failed:\n\n' + report
+            if report:
+                feedback = 'The checks failed:\n\n' + report
             if 'Lines over' in report:
                 feedback += (
                     '\n\nFor each long line, send a block whose '
@@ -1422,8 +1448,10 @@ def edit_loop(messages, allowed, verify, stage,
                     'lines just before or after it so SEARCH '
                     'matches exactly once. Count the '
                     'characters; do not change other lines.')
-            log('  - Checks failed:\n' + fence(tail(report, 25)))
-        if LAST_FINISH == 'length':
+            if report:
+                log('  - Checks failed:\n'
+                    + fence(tail(report, 25)))
+        if LAST_FINISH == 'length' and not unfinished:
             feedback = (
                 'Your reply hit the output limit and was cut '
                 'off. Send fewer blocks per reply. Files named '
