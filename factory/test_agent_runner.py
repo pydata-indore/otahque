@@ -387,6 +387,23 @@ class ApplyEditsTests(unittest.TestCase):
         self.assertIn('ends with >>>>>>> REPLACE', message)
         self.assertNotIn('cut off', message)
 
+    def test_a_separator_after_the_closer_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        message = self.refused(
+            'FILE: a.py\n<<<<<<< SEARCH\nx = 1\n'
+            '>>>>>>> REPLACE\n=======\nx = 2\n')
+        self.assertIn('======= line after', message)
+        self.assertNotIn('no ======= line', message)
+
+    def test_every_bad_block_for_a_file_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        message = self.refused(
+            'FILE: a.py\n```python\n'
+            'FILE: a.py\n<<<<<<< APPEND\nz = 1\n'
+            '>>>>>>> REPLACE\n')
+        self.assertIn('```python', message)
+        self.assertIn('ends with >>>>>>> APPEND', message)
+
     def test_a_search_block_without_separator_is_named(self):
         (self.root / 'a.py').write_text('x = 1\n')
         message = self.refused(
@@ -494,12 +511,19 @@ class ReplyLogTests(unittest.TestCase):
 
     def test_an_unwritable_file_never_stops_the_run(self):
         missing = Path(self.tmp.name) / 'no' / 'replies.md'
-        with mock.patch.dict(os.environ,
-                             {'REPLIES': str(missing)}), \
-                mock.patch.object(agent_runner, 'log') as log:
+        env = {'REPLIES': str(missing)}
+        with (mock.patch.dict(os.environ, env),
+              mock.patch.object(agent_runner, 'log') as log):
             agent_runner.keep_reply('text', 'stop')
         self.assertIn('could not be written',
                       log.call_args[0][0])
+
+    def test_text_utf8_cannot_hold_is_still_kept(self):
+        env = {'REPLIES': str(self.path)}
+        with mock.patch.dict(os.environ, env):
+            agent_runner.keep_reply('a \udc80 b', 'stop')
+        self.assertIn('a ? b',
+                      self.path.read_text(encoding='utf-8'))
 
     def test_ask_keeps_the_raw_reply(self):
         reply = {'choices': [{
