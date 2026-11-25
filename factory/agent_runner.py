@@ -234,6 +234,7 @@ STEP_MIGRATIONS = re.compile(
     r'(?: --name ([a-z_][a-z0-9_]*))?')
 STEP_SETTINGS = re.compile(
     r'settings: *([A-Z][A-Z0-9_]*(?:, *[A-Z][A-Z0-9_]*)*)')
+STEP_FILES = re.compile(r'files: *(\S+(?:, *\S+)*)')
 
 
 def runner_steps(body):
@@ -247,7 +248,7 @@ def runner_steps(body):
     """
     body = (body or '').replace('\r\n', '\n')
     steps = {'startapp': [], 'makemigrations': None,
-             'settings': []}
+             'settings': [], 'files': []}
     found = re.search(r'^## Runner\n(.*?)(?=^## |\Z)', body,
                       re.S | re.M)
     if not found:
@@ -260,6 +261,7 @@ def runner_steps(body):
         app = STEP_STARTAPP.fullmatch(item)
         migrate = STEP_MIGRATIONS.fullmatch(item)
         names = STEP_SETTINGS.fullmatch(item)
+        files = STEP_FILES.fullmatch(item)
         if app:
             steps['startapp'].append(app[1])
         elif migrate:
@@ -276,12 +278,22 @@ def runner_steps(body):
                     + ', '.join(refused) + ', which a ticket '
                     'may never hand to it.')
             steps['settings'] += wanted
+        elif files:
+            for path in re.split(r', *', files[1]):
+                if (path.startswith('/') or '..' in path
+                        or '\\' in path):
+                    raise Blocked(
+                        f'The Runner section lists {path}; a '
+                        'file must be a path inside the '
+                        'repository.')
+                steps['files'].append(path)
         else:
             raise Blocked(
                 f'The Runner section has a line I cannot use: '
                 f'"{line.strip()}". Allowed: "startapp <app>", '
                 '"makemigrations [<app> ...] [--name <name>]", '
-                'and "settings: NAME, NAME".')
+                '"settings: NAME, NAME", and '
+                '"files: path, path".')
     return steps
 
 
@@ -737,6 +749,20 @@ def tracked(path):
     return bool(out.strip())
 
 
+def in_scope(path):
+    """Say whether the ticket's files: line allows path.
+
+    A ticket that lists its files keeps the run to them, so one
+    part of a split chapter does not wander into the next part's
+    files (#68). No files: line, no limit.
+    """
+    files = STEPS.get('files') or []
+    # Files the runner's own startapp made stay in scope, so a
+    # new app's untouched stubs never fail the checks.
+    return (not files or path in files
+            or path in STARTAPP_FILES)
+
+
 def tests_step_path(path):
     """Allow tests, and a new app's package files.
 
@@ -744,14 +770,21 @@ def tests_step_path(path):
     the agent can also correct one it made in an earlier
     attempt; an existing app's files stay out of reach.
     """
-    return bool(TESTS.fullmatch(path) or (
+    return bool((TESTS.fullmatch(path) and in_scope(path)) or (
         PACKAGE.fullmatch(path) and not tracked(path)))
 
 
 def may_edit(path):
     """True if the agent may write this path itself."""
-    return (not DENIED.search(path)
+    return (not DENIED.search(path) and in_scope(path)
             and any(rule.fullmatch(path) for rule in ALLOWED))
+
+
+def in_reference(label):
+    """Say whether a book listing is for one of the files."""
+    files = STEPS.get('files') or []
+    found = PROJECT_FILE.match(label)
+    return not files or bool(found and found.group(0) in files)
 
 
 def file_text(paths):
@@ -1336,7 +1369,8 @@ def reference_text(issue):
             for label, code in LISTING.findall(raw):
                 label = html.unescape(label).strip()
                 if (SKIP_LABEL.search(label)
-                        or not PROJECT_FILE.match(label)):
+                        or not PROJECT_FILE.match(label)
+                        or not in_reference(label)):
                     continue
                 text = html.unescape(code)
                 if total + len(text) > REFERENCE_TOTAL_LIMIT:

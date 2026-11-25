@@ -624,7 +624,7 @@ class RunnerStepsTests(unittest.TestCase):
         steps = agent_runner.runner_steps('## Intended result\n')
         self.assertEqual(steps, {'startapp': [],
                                  'makemigrations': None,
-                                 'settings': []})
+                                 'settings': [], 'files': []})
 
     def test_every_step_is_read(self):
         steps = self.steps(
@@ -2441,6 +2441,60 @@ class EditLoopStopTests(unittest.TestCase):
                                    lambda: (True, ''), 'Code')
         self.assertIn('No FILE/SEARCH/REPLACE blocks',
                       str(caught.exception))
+
+
+class TicketFilesTests(unittest.TestCase):
+    """A ticket can name the only files its run may change."""
+
+    BODY = ('## Runner\n\n'
+            '- files: events/admin.py, events/tests.py\n')
+
+    def setUp(self):
+        use_layout(self)
+        self.addCleanup(setattr, agent_runner, 'STEPS',
+                        agent_runner.STEPS)
+
+    def test_the_files_line_is_read(self):
+        steps = agent_runner.runner_steps(self.BODY)
+        self.assertEqual(steps['files'],
+                         ['events/admin.py', 'events/tests.py'])
+
+    def test_a_path_outside_the_checkout_is_refused(self):
+        for bad in ('../secret.py', '/etc/passwd',
+                    'events\\admin.py', '..\\x.py'):
+            with self.subTest(bad=bad):
+                with self.assertRaises(agent_runner.Blocked):
+                    agent_runner.runner_steps(
+                        f'## Runner\n\n- files: {bad}\n')
+
+    def test_only_listed_files_may_be_edited(self):
+        agent_runner.STEPS = agent_runner.runner_steps(self.BODY)
+        self.assertTrue(agent_runner.may_edit('events/admin.py'))
+        self.assertFalse(
+            agent_runner.may_edit('registrations/admin.py'))
+        self.assertTrue(
+            agent_runner.tests_step_path('events/tests.py'))
+        self.assertFalse(
+            agent_runner.tests_step_path('config/tests.py'))
+
+    def test_startapp_files_stay_in_scope(self):
+        agent_runner.STEPS = agent_runner.runner_steps(self.BODY)
+        self.addCleanup(agent_runner.STARTAPP_FILES.clear)
+        agent_runner.STARTAPP_FILES.append('events/apps.py')
+        self.assertTrue(agent_runner.may_edit('events/apps.py'))
+        self.assertFalse(agent_runner.may_edit('events/urls.py'))
+
+    def test_no_files_line_keeps_the_layout_rules(self):
+        agent_runner.STEPS = agent_runner.runner_steps('')
+        self.assertTrue(
+            agent_runner.may_edit('accounts/admin.py'))
+
+    def test_the_reference_keeps_only_listed_files(self):
+        agent_runner.STEPS = agent_runner.runner_steps(self.BODY)
+        self.assertTrue(agent_runner.in_reference(
+            'events/admin.py (add at the end)'))
+        self.assertFalse(agent_runner.in_reference(
+            'registrations/admin.py'))
 
 if __name__ == '__main__':
     unittest.main()
