@@ -130,7 +130,7 @@ jobs:
           EURI_BASE_URL: ${{ vars.EURI_BASE_URL }}
           REFERENCE_REPO: ${{ vars.REFERENCE_REPO }}
           REFERENCE_REF: ${{ vars.REFERENCE_REF }}
-          MAX_ATTEMPTS: "3"
+          MAX_ATTEMPTS: "5"
           TEST_ATTEMPTS: "5"
           REVIEW_ROUNDS: "2"
           QODO_WAIT_MINUTES: "20"

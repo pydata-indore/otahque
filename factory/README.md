@@ -175,9 +175,10 @@ logs it and continues without the rest.
 
 ## Limits and stopping
 
-- Up to 3 attempts per step (`MAX_ATTEMPTS`), and 5 for the
-  tests step (`TEST_ATTEMPTS`), which writes the most text and
-  keeps each attempt's good files. A reply cut off at the
+- Up to 5 attempts per step (`MAX_ATTEMPTS` in `agent.yml`; the
+  runner's own default is 3), and 5 for the tests step
+  (`TEST_ATTEMPTS`). Each attempt keeps its good files, so a big
+  step makes steady progress (#68). A reply cut off at the
   model's output limit (`MAX_TOKENS`) is logged, and the model
   is told to send fewer blocks per reply. A block cut off, or
   missing a marker line so that it runs into the next file's
