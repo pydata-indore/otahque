@@ -141,6 +141,11 @@ ticket, in a `## Runner` section with one item a line:
   no setting. `SECRET_KEY`, `DEBUG`, and
   `ALLOWED_HOSTS` can never be named, and imports, docstrings,
   and the `try` block that reads the secret key are never open.
+- `files: path, path`: the only files the agent may change, tests
+  included, on top of the usual limits; the book reference then
+  shows only their listings. It keeps one part of a split
+  chapter out of the next part's files (#68). New package files
+  that `startapp` makes stay open. Without it, no such limit.
 
 A ticket without the section gets none of these. Any other line
 stops the run before the first model call, with the line and
