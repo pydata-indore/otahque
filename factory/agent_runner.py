@@ -1387,7 +1387,9 @@ def edit_loop(messages, allowed, verify, stage,
     # True after a cut-off reply whose edits passed the checks:
     # the end of that reply is missing, so ask before moving on.
     unfinished = False
-    for attempt in range(1, limit + 1):
+    attempt, extended = 0, False
+    while attempt < limit:
+        attempt += 1
         out_of_time()
         log(f'- {stage}: attempt {attempt} of {limit}')
         reply = ask(messages)
@@ -1420,6 +1422,10 @@ def edit_loop(messages, allowed, verify, stage,
                 return report
             if ok:
                 unfinished = True
+                if attempt == limit and not extended:
+                    # One more turn, only to send the rest or
+                    # answer DONE; it is never repeated.
+                    limit, extended = limit + 1, True
                 feedback = (
                     'Your reply hit the output limit and was '
                     'cut off. The checks pass on what '

@@ -2417,6 +2417,20 @@ class EditLoopStopTests(unittest.TestCase):
         self.assertEqual(len(checks), 2)
         self.assertIn('DONE', messages[-1]['content'])
 
+    def test_a_cut_off_last_attempt_may_still_finish(self):
+        replies = iter(['edits', 'DONE'])
+        agent_runner.ask = lambda messages: next(replies)
+        self.addCleanup(setattr, agent_runner, 'LAST_FINISH',
+                        None)
+
+        def apply(reply, allowed):
+            agent_runner.LAST_FINISH = 'length'
+            return ['x.py']
+        agent_runner.apply_edits = apply
+        report = agent_runner.edit_loop(
+            [], None, lambda: (True, 'OK'), 'Code', attempts=1)
+        self.assertEqual(report, 'OK')
+
     def test_unapplied_edits_are_named_too(self):
         def refuse(reply, allowed):
             raise ValueError(
