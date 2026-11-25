@@ -131,6 +131,7 @@ jobs:
           REFERENCE_REPO: ${{ vars.REFERENCE_REPO }}
           REFERENCE_REF: ${{ vars.REFERENCE_REF }}
           MAX_ATTEMPTS: "3"
+          TEST_ATTEMPTS: "5"
           REVIEW_ROUNDS: "2"
           QODO_WAIT_MINUTES: "20"
           RUN_MINUTES: "75"

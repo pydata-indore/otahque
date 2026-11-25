@@ -225,6 +225,54 @@ class ApplyEditsTests(unittest.TestCase):
         self.assertEqual((self.root / 'a.py').read_text(),
                          'x = 1\n')
 
+    def test_a_cut_off_block_is_named_not_dropped(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        (self.root / 'b.py').write_text('y = 1\n')
+        reply = (block('a.py', 'x = 1\n', 'x = 2\n')
+                 + 'FILE: b.py\n<<<<<<< APPEND\n'
+                 'class Cut:\n    def test_one(self):\n')
+        partial = agent_runner.PartialEdits
+        with self.assertRaises(partial) as caught:
+            self.apply(reply)
+        self.assertIn('b.py', str(caught.exception))
+        self.assertIn('cut off', str(caught.exception))
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 2\n')
+        self.assertEqual((self.root / 'b.py').read_text(),
+                         'y = 1\n')
+
+    def test_a_cut_off_file_keeps_its_complete_blocks_out(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        reply = (block('a.py', 'x = 1\n', 'x = 2\n')
+                 + 'FILE: a.py\n<<<<<<< APPEND\nclass Cut:\n')
+        with self.assertRaisesRegex(ValueError, 'cut off'):
+            self.apply(reply)
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 1\n')
+
+    def test_a_reply_cut_after_file_line_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        reply = (block('a.py', 'x = 1\n', 'x = 2\n')
+                 + 'FILE: b.py\n<<<<<<')
+        with self.assertRaisesRegex(ValueError,
+                                    'b.py was cut off'):
+            self.apply(reply)
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 2\n')
+
+    def test_a_missing_separator_names_both_files(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        (self.root / 'b.py').write_text('y = 1\n')
+        reply = ('FILE: a.py\n<<<<<<< SEARCH\nx = 1\n'
+                 + block('b.py', 'y = 1\n', 'y = 2\n'))
+        with self.assertRaises(ValueError) as caught:
+            self.apply(reply)
+        message = str(caught.exception)
+        self.assertIn('a.py', message)
+        self.assertIn('b.py', message)
+        self.assertEqual((self.root / 'b.py').read_text(),
+                         'y = 1\n')
+
     def test_markdown_keeps_such_a_line(self):
         (self.root / 'notes.md').write_text('# Notes\n')
         self.apply('FILE: notes.md\n<<<<<<< APPEND\n'
@@ -2309,6 +2357,33 @@ class EditLoopStopTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn('Some of your edits were applied', message)
         self.assertIn('Applied anyway: a.py', message)
+
+    def test_a_reply_cut_at_the_limit_gets_advice(self):
+        agent_runner.LAST_FINISH = 'length'
+        self.addCleanup(setattr, agent_runner, 'LAST_FINISH',
+                        None)
+
+        def cut(reply, allowed):
+            raise ValueError('The block for b.py was cut off.')
+        agent_runner.apply_edits = cut
+        with self.assertRaises(agent_runner.Blocked) as caught:
+            agent_runner.edit_loop([], None,
+                                   lambda: (True, ''), 'Tests')
+        self.assertIn('output limit', str(caught.exception))
+        self.assertIn('fewer blocks', str(caught.exception))
+        self.assertIn('send all their blocks again',
+                      str(caught.exception))
+
+    def test_the_tests_step_gets_its_own_attempts(self):
+        agent_runner.TEST_ATTEMPTS = 5
+        self.addCleanup(setattr, agent_runner, 'TEST_ATTEMPTS',
+                        agent_runner.TEST_ATTEMPTS)
+        report = 'FAILED (failures=1)'
+        with self.assertRaises(agent_runner.Blocked):
+            agent_runner.edit_loop([], None,
+                                   lambda: (False, report),
+                                   'Tests')
+        self.assertEqual(self.asked, 5)
 
     def test_unapplied_edits_are_named_too(self):
         def refuse(reply, allowed):

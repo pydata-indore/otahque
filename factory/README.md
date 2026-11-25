@@ -170,7 +170,14 @@ logs it and continues without the rest.
 
 ## Limits and stopping
 
-- Up to 3 attempts per step (`MAX_ATTEMPTS`). A settings guard
+- Up to 3 attempts per step (`MAX_ATTEMPTS`), and 5 for the
+  tests step (`TEST_ATTEMPTS`), which writes the most text and
+  keeps each attempt's good files. A reply cut off at the
+  model's output limit (`MAX_TOKENS`) is logged, and the model
+  is told to send fewer blocks per reply. A block cut off, or
+  missing a marker line so that it runs into the next file's
+  block, is named; none of those files' edits is applied, and
+  the model sends all their blocks again. A settings guard
   refusal ends the step at once, since no retry can make a
   setting the ticket does not open pass. In the code steps that
   stops the run, and that part goes to a person; in a local
