@@ -2,6 +2,7 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.staticfiles import finders
 from django.core.exceptions import ValidationError
@@ -35,6 +36,13 @@ def save_event(**changes):
         'ends_at', fields['starts_at'] + timedelta(hours=2)
     )
     return Event.objects.create(**fields)
+
+
+def admin_url(model, page, *args):
+    """Return an admin page's address, such as an event's."""
+    meta = model._meta
+    name = f'admin:{meta.app_label}_{meta.model_name}_{page}'
+    return reverse(name, args=args)
 
 
 def layout_pages(event):
@@ -596,3 +604,219 @@ class PlacesLeftTests(TestCase):
         self.assertContains(response, 'Leeds social')
         self.assertNotContains(response, 'places left')
         self.assertNotContains(response, 'class="places')
+
+
+def event_form(event, **changes):
+    """Build what the admin's event page sends; UTC times."""
+    data = {
+        'title': event.title,
+        'status': event.status,
+        'starts_at_0': f'{event.starts_at:%Y-%m-%d}',
+        'starts_at_1': f'{event.starts_at:%H:%M}',
+        'ends_at_0': f'{event.ends_at:%Y-%m-%d}',
+        'ends_at_1': f'{event.ends_at:%H:%M}',
+        'timezone': event.timezone,
+        'location': event.location,
+        'capacity': event.capacity,
+        'registrations-TOTAL_FORMS': 0,
+        'registrations-INITIAL_FORMS': 0,
+    }
+    data.update(changes)
+    return data
+
+
+class EventAdminTests(TestCase):
+    """The event pages: list, UTC times, rules, history."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.sam = User.objects.create_superuser(
+            'sam@example.org', display_name='Sam'
+        )
+        cls.workshop = save_event(
+            title='Django workshop',
+            starts_at=datetime(2026, 12, 3, 9, tzinfo=UTC),
+            timezone='Asia/Kolkata',
+            location='Virtual',
+        )
+        save_event(title='Spring planning',
+                   status=Event.Status.DRAFT)
+        sai = User.objects.create_user(
+            'sai@example.org', display_name='Sai'
+        )
+        cls.place = Registration.objects.create(
+            event=cls.workshop, member=sai
+        )
+
+    def setUp(self):
+        self.client.force_login(self.sam)
+        self.url = admin_url(Event, 'change',
+                             self.workshop.pk)
+
+    def test_list_shows_drafts_local_start_and_places(self):
+        response = self.client.get(
+            admin_url(Event, 'changelist')
+        )
+        self.assertContains(response, 'Spring planning')
+        self.assertContains(
+            response, 'Thu 03 Dec 2026, 14:30 IST'
+        )
+        self.assertContains(
+            response, '<td class="field-places">39</td>',
+            html=True,
+        )
+        self.assertNotContains(response, 'delete_selected')
+
+    def test_times_are_typed_in_utc(self):
+        self.client.post(self.url, event_form(
+            self.workshop, starts_at_1='15:00',
+            ends_at_1='17:00',
+        ))
+        self.workshop.refresh_from_db()
+        self.assertEqual(
+            self.workshop.starts_at,
+            datetime(2026, 12, 3, 15, tzinfo=UTC),
+        )
+        response = self.client.get(self.url)
+        self.assertContains(
+            response, 'Thu 03 Dec 2026, 20:30 IST'
+        )
+
+    def test_rule_messages_reach_the_page(self):
+        for changes, message in [
+            ({'capacity': 0},
+             'Capacity must be more than 0.'),
+            ({'ends_at_1': '08:00'},
+             'An event must end after it starts.'),
+            ({'timezone': 'Mars/Base'},
+             'Mars/Base is not a known time zone.'),
+        ]:
+            form = event_form(self.workshop, **changes)
+            response = self.client.post(self.url, form)
+            self.assertContains(response, message)
+        self.workshop.refresh_from_db()
+        self.assertEqual(self.workshop.capacity, 40)
+
+    def test_registrations_are_read_only_history(self):
+        with self.assertNumQueries(5):
+            response = self.client.get(self.url)
+        self.assertContains(response, 'sai@example.org')
+        self.assertNotContains(
+            response, 'name="registrations-0-status"'
+        )
+        forged = {
+            'registrations-TOTAL_FORMS': 1,
+            'registrations-INITIAL_FORMS': 1,
+            'registrations-0-id': self.place.pk,
+            'registrations-0-event': self.workshop.pk,
+            'registrations-0-status': 'cancelled',
+        }
+        self.client.post(
+            self.url, event_form(self.workshop, **forged)
+        )
+        self.place.refresh_from_db()
+        self.assertEqual(self.place.status, 'active')
+
+    def test_history_blocks_delete_drafts_may_go(self):
+        response = self.client.post(
+            admin_url(Event, 'delete', self.workshop.pk),
+            {'post': 'yes'},
+        )
+        self.assertContains(response, 'Cannot delete event')
+        draft = Event.objects.get(title='Spring planning')
+        self.client.post(
+            admin_url(Event, 'delete', draft.pk),
+            {'post': 'yes'},
+        )
+        self.assertQuerySetEqual(
+            Event.objects.all(), ['Django workshop'],
+            transform=str,
+        )
+
+
+def revoke_form(when):
+    """Build the post that revokes an assignment at when."""
+    return {'revoked_at_0': f'{when:%Y-%m-%d}',
+            'revoked_at_1': f'{when:%H:%M:%S}'}
+
+
+class OrganizerAssignmentAdminTests(TestCase):
+    """Assign and revoke organizers; never delete."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.sam = User.objects.create_superuser(
+            'sam@example.org', display_name='Sam'
+        )
+        cls.event = save_event()
+        cls.sai = User.objects.create_user(
+            'sai@example.org', display_name='Sai'
+        )
+
+    def setUp(self):
+        self.client.force_login(self.sam)
+
+    def add(self):
+        """Assign Sai to the event through the admin."""
+        return self.client.post(
+            admin_url(OrganizerAssignment, 'add'),
+            {'event': self.event.pk, 'member': self.sai.pk},
+        )
+
+    def test_add_and_revoke_but_never_delete(self):
+        self.add()
+        assignment = OrganizerAssignment.objects.get()
+        change = admin_url(OrganizerAssignment, 'change',
+                           assignment.pk)
+        tomorrow = timezone.now() + timedelta(days=1)
+        self.client.post(change, revoke_form(tomorrow))
+        assignment.refresh_from_db()
+        self.assertIsNotNone(assignment.revoked_at)
+        response = self.client.post(
+            admin_url(OrganizerAssignment, 'delete',
+                      assignment.pk),
+            {'post': 'yes'},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            OrganizerAssignment.objects.count(), 1
+        )
+
+    def test_rule_messages_reach_the_page(self):
+        self.add()
+        self.assertContains(
+            self.add(),
+            'This member already organizes this event.',
+        )
+        assignment = OrganizerAssignment.objects.get()
+        change = admin_url(OrganizerAssignment, 'change',
+                           assignment.pk)
+        early = datetime(2026, 1, 1, tzinfo=UTC)
+        self.assertContains(
+            self.client.post(change, revoke_form(early)),
+            'An assignment cannot be revoked before it '
+            'starts.',
+        )
+
+    def test_list_runs_a_fixed_number_of_queries(self):
+        for title in ('Python meetup', 'Spring planning'):
+            OrganizerAssignment.objects.create(
+                event=save_event(title=title),
+                member=self.sai,
+            )
+        with self.assertNumQueries(5):
+            self.client.get(
+                admin_url(OrganizerAssignment, 'changelist')
+            )
+
+    def test_a_revoked_assignment_stays_revoked(self):
+        model_admin = admin.site._registry[OrganizerAssignment]
+        current = OrganizerAssignment(
+            event=self.event, member=self.sai)
+        self.assertNotIn(
+            'revoked_at',
+            model_admin.get_readonly_fields(None, current))
+        current.revoked_at = timezone.now()
+        self.assertIn(
+            'revoked_at',
+            model_admin.get_readonly_fields(None, current))
