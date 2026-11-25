@@ -157,3 +157,7 @@ class OrganizerAssignment(models.Model):
 
     def __str__(self):
         return f'{self.member} organizes {self.event}'
+
+    def validate_constraints(self, exclude=None):
+        """Check every rule, even for fields a form omits."""
+        super().validate_constraints(exclude=None)
