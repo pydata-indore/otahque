@@ -9,6 +9,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from events.models import Event
+from events.tests import admin_url
 from .models import Registration
 
 User = get_user_model()
@@ -138,3 +139,58 @@ class RegistrationTests(TestCase):
         self.assertEqual(
             Registration.objects.active().count(), 1
         )
+
+
+class RegistrationAdminTests(TestCase):
+    """Registrations in the admin are view-only."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.sam = User.objects.create_superuser(
+            'sam@example.org', display_name='Sam'
+        )
+        for title in ('Python meetup', 'Django workshop'):
+            event = Event.objects.create(
+                title=title,
+                starts_at=datetime(2026, 12, 3, 9,
+                                   tzinfo=UTC),
+                ends_at=datetime(2026, 12, 3, 12,
+                                 tzinfo=UTC),
+                timezone='UTC', location='Virtual',
+                capacity=40,
+            )
+            for name in ('Sai', 'Raj'):
+                member, _ = User.objects.get_or_create(
+                    email=f'{name.lower()}@example.org',
+                    defaults={'display_name': name},
+                )
+                Registration.objects.create(
+                    event=event, member=member
+                )
+
+    def setUp(self):
+        self.client.force_login(self.sam)
+
+    def test_history_is_view_only(self):
+        place = Registration.objects.first()
+        add = self.client.get(admin_url(Registration, 'add'))
+        self.assertEqual(add.status_code, 403)
+        change = admin_url(Registration, 'change', place.pk)
+        response = self.client.get(change)
+        self.assertContains(response, 'sai@example.org')
+        self.assertNotContains(response, 'name="_save"')
+        response = self.client.post(
+            change, {'status': 'cancelled'}
+        )
+        self.assertEqual(response.status_code, 403)
+        response = self.client.post(
+            admin_url(Registration, 'delete', place.pk),
+            {'post': 'yes'},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_list_runs_a_fixed_number_of_queries(self):
+        with self.assertNumQueries(6):
+            self.client.get(
+                admin_url(Registration, 'changelist')
+            )
