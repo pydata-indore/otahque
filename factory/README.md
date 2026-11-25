@@ -180,10 +180,17 @@ logs it and continues without the rest.
   (`TEST_ATTEMPTS`). Each attempt keeps its good files, so a big
   step makes steady progress (#68). A reply cut off at the
   model's output limit (`MAX_TOKENS`) is logged, and the model
-  is told to send fewer blocks per reply. A block cut off, or
-  missing a marker line so that it runs into the next file's
-  block, is named; none of those files' edits is applied, and
-  the model sends all their blocks again. A settings guard
+  is told to send fewer blocks per reply. A block that can't be
+  read is named with its problem: cut off only when the reply
+  ends inside it, otherwise a code fence after the `FILE:` line,
+  the wrong closing line, a missing `=======` or closing line,
+  or an indented marker (#78); a block that runs into the next
+  file's block names both files. Spaces after a marker line and
+  Windows line endings are ignored. None of those files' edits
+  is applied, and the model sends all their blocks again.
+  Each raw reply, with its finish reason, is kept in
+  `factory-replies.md` in the runner's temp folder and uploaded
+  with `factory-log.md` as the run's artifact. A settings guard
   refusal ends the step at once, since no retry can make a
   setting the ticket does not open pass. In the code steps that
   stops the run, and that part goes to a person; in a local

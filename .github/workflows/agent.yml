@@ -128,6 +128,8 @@ jobs:
           EURI_API_KEY: ${{ secrets.EURI_API_KEY }}
           EURI_MODEL: ${{ vars.EURI_MODEL }}
           EURI_BASE_URL: ${{ vars.EURI_BASE_URL }}
+          # Each raw model reply, outside the checkout (#78).
+          REPLIES: ${{ runner.temp }}/factory-replies.md
           REFERENCE_REPO: ${{ vars.REFERENCE_REPO }}
           REFERENCE_REF: ${{ vars.REFERENCE_REF }}
           MAX_ATTEMPTS: "5"
@@ -160,7 +162,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-log-${{ github.run_id }}
-          path: factory-log.md
+          path: |
+            factory-log.md
+            ${{ runner.temp }}/factory-replies.md
           if-no-files-found: ignore
 
   # Confirms the gate in Qodo's records (factory/confirm_gate.py)
