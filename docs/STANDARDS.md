@@ -106,11 +106,14 @@ chapters, such as a docstring pass, is one capability.
 | PostgreSQL | 32 |
 | Transactions and concurrency | 33 |
 | Class-based views | 35 |
+| Generic display views and pagination | 36 |
 | Email | 43 |
 | Background tasks | 44 |
 | APIs and Django REST framework | 47 to 49 |
+| Search, indexes, and query plans | 56 |
 
-The full contents are on the book site; this table lists the topics
+Every chapter, with its page on the book site, is listed in
+[BOOK_REFERENCE.md](BOOK_REFERENCE.md); this table lists the topics
 reviews ask for most.
 
 ## Security
