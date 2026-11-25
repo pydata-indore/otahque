@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # The runner reads these at import; the tests never use them.
 os.environ.setdefault('ISSUE', '0')
@@ -353,6 +354,178 @@ class ApplyEditsTests(unittest.TestCase):
                 reply, lambda path: path == 'ok.py')
         self.assertFalse((self.root / 'no.py').exists())
         self.assertTrue((self.root / 'ok.py').exists())
+
+    def refused(self, reply):
+        """Return the message apply() raises for the reply."""
+        with self.assertRaises(ValueError) as caught:
+            self.apply(reply)
+        return str(caught.exception)
+
+    def test_a_fence_after_the_file_line_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        message = self.refused(
+            'FILE: a.py\n```python\n<<<<<<< APPEND\n'
+            'z = 1\n>>>>>>> APPEND\n```\n')
+        self.assertIn('```python', message)
+        self.assertNotIn('cut off', message)
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 1\n')
+
+    def test_append_closed_with_replace_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        message = self.refused(
+            'FILE: a.py\n<<<<<<< APPEND\nz = 1\n'
+            '>>>>>>> REPLACE\n')
+        self.assertIn('ends with >>>>>>> APPEND', message)
+        self.assertNotIn('cut off', message)
+
+    def test_search_closed_with_append_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        message = self.refused(
+            'FILE: a.py\n<<<<<<< SEARCH\nx = 1\n=======\n'
+            'x = 2\n>>>>>>> APPEND\n')
+        self.assertIn('ends with >>>>>>> REPLACE', message)
+        self.assertNotIn('cut off', message)
+
+    def test_a_search_block_without_separator_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        message = self.refused(
+            'FILE: a.py\n<<<<<<< SEARCH\nx = 1\n'
+            '>>>>>>> REPLACE\n')
+        self.assertIn('no ======= line', message)
+        self.assertNotIn('cut off', message)
+
+    def test_a_block_unclosed_before_the_next_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        (self.root / 'b.py').write_text('y = 1\n')
+        message = self.refused(
+            'FILE: a.py\n<<<<<<< APPEND\nz = 1\n'
+            + block('b.py', 'y = 1\n', 'y = 2\n'))
+        self.assertIn('before the next FILE: line', message)
+        self.assertNotIn('cut off', message)
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 1\n')
+        self.assertEqual((self.root / 'b.py').read_text(),
+                         'y = 2\n')
+
+    def test_an_indented_marker_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        message = self.refused(
+            'FILE: a.py\n<<<<<<< APPEND\nz = 1\n'
+            '    >>>>>>> APPEND\n')
+        self.assertIn('indented', message)
+        self.assertNotIn('cut off', message)
+
+    def test_an_indented_separator_is_named(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        message = self.refused(
+            'FILE: a.py\n<<<<<<< SEARCH\nx = 1\n  =======\n'
+            'x = 2\n>>>>>>> REPLACE\n')
+        self.assertIn('indented', message)
+        self.assertNotIn('no ======= line', message)
+
+    def test_spaces_after_markers_are_ignored(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        self.apply('FILE: a.py  \n<<<<<<< APPEND \nz = 1\n'
+                   '>>>>>>> APPEND  \n')
+        self.assertTrue((self.root / 'a.py').read_text()
+                        .endswith('z = 1\n'))
+
+    def test_spaces_inside_a_block_are_kept(self):
+        (self.root / 'a.md').write_text('FILE: data  \n')
+        self.apply('FILE: a.md\n<<<<<<< SEARCH\nFILE: data  \n'
+                   '=======\nFILE: data  \nsep  \n'
+                   '>>>>>>> REPLACE\n')
+        self.assertEqual((self.root / 'a.md').read_text(),
+                         'FILE: data  \nsep  \n')
+
+    def test_windows_line_endings_are_read(self):
+        (self.root / 'a.py').write_text('x = 1\n')
+        self.apply('FILE: a.py\r\n<<<<<<< SEARCH\r\nx = 1\r\n'
+                   '=======\r\nx = 2\r\n>>>>>>> REPLACE\r\n')
+        self.assertEqual((self.root / 'a.py').read_text(),
+                         'x = 2\n')
+
+
+class FakeResponse:
+    """Stand in for the model API's HTTP response."""
+
+    def __init__(self, reply):
+        self.body = json.dumps(reply).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, *args):
+        return self.body
+
+
+class ReplyLogTests(unittest.TestCase):
+    """Each raw model reply is kept in the REPLIES file."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / 'replies.md'
+
+    def test_replies_and_finish_reasons_are_kept(self):
+        with mock.patch.dict(os.environ,
+                             {'REPLIES': str(self.path)}):
+            agent_runner.keep_reply('FILE: a.py\nfirst', 'stop')
+            agent_runner.keep_reply('second', 'length')
+        text = self.path.read_text(encoding='utf-8')
+        self.assertIn('FILE: a.py\nfirst', text)
+        self.assertIn('second', text)
+        self.assertIn('stop', text)
+        self.assertIn('length', text)
+        self.assertLess(text.index('first'),
+                        text.index('second'))
+
+    def test_nothing_is_written_without_replies(self):
+        env = dict(os.environ)
+        env.pop('REPLIES', None)
+        with mock.patch.dict(os.environ, env, clear=True):
+            agent_runner.keep_reply('text', 'stop')
+        self.assertEqual(list(Path(self.tmp.name).iterdir()),
+                         [])
+
+    def test_an_unwritable_file_never_stops_the_run(self):
+        missing = Path(self.tmp.name) / 'no' / 'replies.md'
+        with mock.patch.dict(os.environ,
+                             {'REPLIES': str(missing)}), \
+                mock.patch.object(agent_runner, 'log') as log:
+            agent_runner.keep_reply('text', 'stop')
+        self.assertIn('could not be written',
+                      log.call_args[0][0])
+
+    def test_ask_keeps_the_raw_reply(self):
+        reply = {'choices': [{
+            'message': {'content': 'FILE: a.py\nraw'},
+            'finish_reason': 'stop'}]}
+        env = {'REPLIES': str(self.path),
+               'EURI_BASE_URL': 'https://api.example.org',
+               'EURI_MODEL': 'model',
+               'EURI_API_KEY': 'not-a-key'}
+        with mock.patch.dict(os.environ, env), mock.patch(
+                'urllib.request.urlopen',
+                return_value=FakeResponse(reply)):
+            agent_runner.ask([{'role': 'user',
+                               'content': 'go'}])
+        self.assertIn('FILE: a.py\nraw',
+                      self.path.read_text(encoding='utf-8'))
+
+    def test_the_workflow_keeps_the_replies(self):
+        root = Path(__file__).resolve().parent.parent
+        text = (root / '.github/workflows/agent.yml').read_text(
+            encoding='utf-8')
+        self.assertIn(
+            'REPLIES: ${{ runner.temp }}/factory-replies.md',
+            text)
+        self.assertIn('${{ runner.temp }}/factory-replies.md\n',
+                      text.split('Keep the run log', 1)[1])
 
 
 

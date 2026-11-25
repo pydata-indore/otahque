@@ -387,6 +387,30 @@ def fence(text):
     return '```text\n' + text.strip() + '\n```'
 
 
+def keep_reply(text, finish):
+    """Add a raw model reply to the REPLIES file, if one is set.
+
+    The run log says what was refused; this file shows what the
+    model sent (#78). The workflow puts it outside the checkout
+    and uploads it with the log.
+    """
+    path = os.environ.get('REPLIES')
+    if not path:
+        return
+    ticks = max([3] + [len(row) + 1 for row in
+                       re.findall(r'`+', text)])
+    # A log file must never stop the run it records.
+    try:
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(f'## Reply at {now():%H:%M:%S} UTC '
+                    f'(finish_reason: {finish})\n\n'
+                    + '`' * ticks + 'text\n'
+                    + text + '\n' + '`' * ticks + '\n\n')
+    except OSError as error:
+        log(f'- The reply could not be written to {path}: '
+            f'{error}')
+
+
 # ---------- the model ----------
 
 def ask(messages):
@@ -420,6 +444,7 @@ def ask(messages):
             text = choice['message']['content']
             global LAST_FINISH
             LAST_FINISH = choice.get('finish_reason')
+            keep_reply(text, LAST_FINISH)
             if LAST_FINISH == 'length':
                 log('- The reply hit the output limit '
                     '(MAX_TOKENS) and was cut off.')
@@ -444,22 +469,87 @@ def ask(messages):
             time.sleep(wait)
 
 
+# Spaces after a marker or FILE: line are allowed (#78); the
+# text inside a block is never changed.
 EDIT = re.compile(
-    r'^FILE: *(?P<path>\S+)\n'
-    r'(?:<<<<<<< SEARCH\n(?P<search>.*?)'
-    r'^=======\n(?P<replace>.*?)'
-    r'^>>>>>>> REPLACE$'
-    r'|<<<<<<< APPEND\n(?P<append>.*?)^>>>>>>> APPEND$)',
+    r'^FILE: *(?P<path>\S+)[ \t]*\n'
+    r'(?:<<<<<<< SEARCH[ \t]*\n(?P<search>.*?)'
+    r'^=======[ \t]*\n(?P<replace>.*?)'
+    r'^>>>>>>> REPLACE[ \t]*$'
+    r'|<<<<<<< APPEND[ \t]*\n(?P<append>.*?)'
+    r'^>>>>>>> APPEND[ \t]*$)',
     re.M | re.S,
 )
 
 
 # Every FILE: line, whether or not a complete block follows.
-BLOCK_START = re.compile(r'^FILE: *(?P<path>\S+) *$', re.M)
+BLOCK_START = re.compile(
+    r'^FILE: *(?P<path>\S+)[ \t]*$', re.M)
 # A FILE: line that opens a block, as a swallowed block shows.
 BLOCK_OPEN = re.compile(
-    r'^FILE: *(?P<path>\S+) *\n<<<<<<< (?:SEARCH|APPEND)$',
-    re.M)
+    r'^FILE: *(?P<path>\S+)[ \t]*\n'
+    r'<<<<<<< (?:SEARCH|APPEND)[ \t]*$', re.M)
+CLOSERS = {'<<<<<<< SEARCH': '>>>>>>> REPLACE',
+           '<<<<<<< APPEND': '>>>>>>> APPEND'}
+MARKERS = ('=======', '>>>>>>> REPLACE', '>>>>>>> APPEND')
+
+
+def tidy(text):
+    """Return the reply with LF line endings (#78)."""
+    return text.replace('\r\n', '\n')
+
+
+def block_problem(path, region, last):
+    """Return why the block in region could not be read.
+
+    region runs from its FILE: line to the next block or the
+    end of the reply, which last says. Only a block the reply
+    ends inside is called cut off: a wrong form named as cut
+    off was sent again unchanged, five times (#69, #78).
+    """
+    again = (', so no edit to that file was applied; send '
+             'all its blocks again.')
+    cut = (f'The block for {path} was cut off before its '
+           'closing marker' + again)
+    lines = [line.rstrip(' \t') for line in
+             region.rstrip('\n').split('\n')[1:]]
+    if not lines:
+        return cut if last else (
+            f'The FILE: line for {path} has no block after '
+            'it' + again)
+    opener = lines[0]
+    if opener not in CLOSERS:
+        if last and len(lines) == 1 and any(
+                o.startswith(opener) for o in CLOSERS):
+            return cut
+        return (f'The line after "FILE: {path}" must be '
+                '<<<<<<< SEARCH or <<<<<<< APPEND, with no code '
+                f'fence or other line between, but it is '
+                f'"{opener[:60]}"' + again)
+    kind = opener.split()[1]
+    closer = CLOSERS[opener]
+    body = lines[1:]
+    # First, so a marker sent indented is never called missing.
+    indented = [b for b in body
+                if b != b.strip() and b.strip() in MARKERS]
+    if indented:
+        return (f'The block for {path} has an indented marker '
+                f'line, "{indented[0][:60]}"; marker lines '
+                'start at the beginning of the line' + again)
+    if kind == 'SEARCH' and closer in body:
+        return (f'The SEARCH block for {path} has no ======= '
+                'line between its SEARCH and REPLACE parts'
+                + again)
+    wrong = [m for m in MARKERS[1:]
+             if m != closer and m in body]
+    if wrong:
+        return (f'A {kind} block ends with {closer}, but the '
+                f'block for {path} ends with {wrong[0]}'
+                + again)
+    if last:
+        return cut
+    return (f'The block for {path} has no {closer} line '
+            'before the next FILE: line' + again)
 
 
 class PartialEdits(ValueError):
@@ -484,13 +574,23 @@ def apply_edits(text, allowed):
     away a whole attempt (#55). Every bad block is named. Raise
     PartialEdits, listing what was written, if any file failed.
     """
+    text = tidy(text)
     edits = list(EDIT.finditer(text))
-    # A block with no closing marker matches nothing; it is named
-    # as cut off, never dropped without a word (#55, run 4).
+    # A block that matches nothing is named with its problem,
+    # never dropped without a word (#55, run 4; #78).
     starts = list(BLOCK_START.finditer(text))
-    cut = [s['path'] for s in starts
-           if not any(e.start() <= s.start() < e.end()
-                      for e in edits)]
+    marks = sorted({s.start() for s in starts}
+                   | {e.start() for e in edits})
+    unread = {}
+    for s in starts:
+        if any(e.start() <= s.start() < e.end() for e in edits):
+            continue
+        stop = next((m for m in marks if m > s.start()),
+                    len(text))
+        unread.setdefault(s['path'], block_problem(
+            s['path'], text[s.start():stop],
+            not text[stop:].strip()))
+    cut = list(unread)
     # A block missing its ======= line runs on into the next
     # FILE: block; both are named, neither is applied.
     opens = list(BLOCK_OPEN.finditer(text))
@@ -504,11 +604,8 @@ def apply_edits(text, allowed):
         raise ValueError(
             'No FILE/SEARCH/REPLACE or APPEND blocks found.')
     pending, errors, failed = {}, [], set()
-    for path in dict.fromkeys(cut):
-        errors.append(
-            f'The block for {path} was cut off before its '
-            'closing marker, so no edit to that file was '
-            'applied; send all its blocks again.')
+    for path, problem in unread.items():
+        errors.append(problem)
         failed.add(path)
     for path, inner in swallowed:
         errors.append(
